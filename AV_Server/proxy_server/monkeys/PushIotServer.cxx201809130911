@@ -1,0 +1,546 @@
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#include "resip/stack/SipMessage.hxx"
+#include "resip/stack/Helper.hxx"
+#include "rutil/Logger.hxx"
+
+#include "AsyncProcessorMessage.hxx"
+#include "monkeys/PushIotServer.hxx"
+#include "RequestContext.hxx"
+#include "Proxy.hxx"
+
+#include "resip/stack/SipStack.hxx"
+#include "resip/stack/NameAddr.hxx"
+#include "rutil/WinLeakCheck.hxx"
+#include "resip/stack/ExtensionHeader.hxx"
+
+#include "protocol/proto_inner.h"
+
+#include <sys/time.h>
+#include <map>
+
+#define RESIPROCATE_SUBSYSTEM resip::Subsystem::REPRO
+
+using namespace resip;
+using namespace repro;
+using namespace std;
+using namespace rapidjson;
+
+class PushIotServerAsyncMessage : public AsyncProcessorMessage
+{
+public:
+	PushIotServerAsyncMessage(AsyncProcessor& proc,
+		const resip::Data& tid,
+		TransactionUser* passedtu) :
+		AsyncProcessorMessage(proc, tid, passedtu),
+		mQueryResult(0)
+	{
+	}
+
+	Data mQueryResultData;
+	NameAddr mSipServerData;
+	int mQueryResult;
+	Data mCall_ID;
+	Data mFrom;
+	Data mTo;
+};
+map<std::string,int> g_mapCall_Object;//后面VALUE改成对象
+
+PushIotServer::PushIotServer(ProxyConfig& config,
+	Dispatcher* asyncDispatcher,
+	resip::RegistrationPersistenceManager& store) :
+	AsyncProcessor("PushIotServer", asyncDispatcher),
+	mDefaultErrorBehavior("500, Server Internal DB Error"),
+	mSipConServerIP(config.getConfigData("SipConServerIP", "10.101.70.52")),
+    mSipConServerPort(config.getConfigInt("SipConServerPort", 7878)),
+	mMediaServerIP(config.getConfigData("MediaIP", "10.101.70.52")),
+    mMediaServerPort(config.getConfigInt("MediaPort", 7878)),
+	mIotServerIP(config.getConfigData("IotServerIP", "10.101.70.52")),
+    mIotServerPort(config.getConfigInt("IotServerPort", 7878)),
+    mStore(store)
+    {
+}
+
+PushIotServer::~PushIotServer()
+{
+}
+
+short
+PushIotServer::parseActionResult(const Data& result, Data& redirectReason)
+{
+	Data redirectStatusCode;
+	ParseBuffer pb(result);
+	const char* anchor = pb.position();
+	pb.skipToChar(',');
+	pb.data(redirectStatusCode, anchor);
+	if (pb.position()[0] == ',')
+	{
+		pb.skipChar();
+		pb.skipWhitespace();
+		anchor = pb.position();
+		pb.skipToEnd();
+		pb.data(redirectReason, anchor);
+	}
+	return (short)redirectStatusCode.convertInt();
+}
+
+
+Processor::processor_action_t
+PushIotServer::applyActionResult(RequestContext &rc, const Data& actionResult, const resip::NameAddr& serverAddr)
+{
+	if (!actionResult.empty())
+	{
+		Data redirectReason;
+		short redirectStatusCode = parseActionResult(actionResult, redirectReason);
+
+		if (redirectStatusCode >= 400 && redirectStatusCode < 600)
+		{
+			// error 
+			SipMessage response;
+			InfoLog(<< "Request is failed - responding with a " << redirectStatusCode);
+			Helper::makeResponse(response, rc.getOriginalRequest(), redirectStatusCode);
+			rc.sendResponse(response);
+			return SkipThisChain;
+		}
+		else if (redirectStatusCode == 301 || redirectStatusCode == 302)
+		{
+			SipMessage response;
+			InfoLog(<< "Request is successed - responding with a " << redirectStatusCode);
+
+            /* 增加应答的私有字段 */
+            resip::Uri inputUri = rc.getOriginalRequest().header(h_RequestLine).uri().getAorAsUri(rc.getOriginalRequest().getSource().getType());
+			//resip::Uri inputUri = rc.getOriginalRequest().header(h_From).uri().getAorAsUri(rc.getOriginalRequest().getSource().getType());
+		    //!RjS! This doesn't look exception safe - need guards
+		    mStore.lockRecord(inputUri);
+
+		    resip::ContactList contacts;
+		    mStore.getContacts(inputUri,contacts);			
+
+            mStore.unlockRecord(inputUri);
+
+			resip::ContactInstanceRecord contact;
+            if(contacts.size() > 0)
+            {
+                for(resip::ContactList::iterator i  = contacts.begin(); i != contacts.end(); ++i)
+                {
+                    contact = *i;                
+                    InfoLog (<< *this << " Local contact " << contact.mPLocalContact <<
+                        " with tuple " << contact.mReceivedFrom);
+
+					ExtensionHeader h_LocalContact("P-Local-Contact");
+					response.header(h_LocalContact).push_front(StringCategory(contact.mPLocalContact));
+					//break;
+                }
+            }
+			
+			Helper::makeResponse(response, rc.getOriginalRequest(), redirectStatusCode, serverAddr);
+			rc.sendResponse(response);
+			return SkipThisChain;
+		}
+	}
+
+	// 
+	DebugLog(<< "Should not get here");
+	return Continue;
+}
+
+Processor::processor_action_t
+PushIotServer::process(RequestContext &rc)
+{
+	DebugLog(<< "Monkey handling request: " << *this << "; reqcontext = " << rc);
+
+	Message *message = rc.getCurrentEvent();
+
+	PushIotServerAsyncMessage *async = dynamic_cast<PushIotServerAsyncMessage*>(message);
+
+	if (async)
+	{
+		if (async->mQueryResult == 0)  // If query was successful, then get query result
+		{
+			//InfoLog(<< "get sipserver completed successfully: Result=" << async->mQueryResult << ", resultData=" << async->mQueryResultData);
+			Data userName = rc.getOriginalRequest().header(h_To).uri().user();
+			//async->mSipServerData.uri().user() = userName;
+			//return applyActionResult(rc, async->mQueryResultData, async->mSipServerData);
+            //如果收到的是自己定义的字段的值就继续返回等待事件
+			return WaitingForEvent;
+		}
+		else
+		{
+			InfoLog(<< "get sipserver failed: Result=" << async->mQueryResult);
+			//return applyActionResult(rc, mDefaultErrorBehavior, async->mSipServerData);
+            return Continue;
+		}
+	}
+	else
+	{
+		// Dispatch async
+		PushIotServerAsyncMessage* async_msg = new PushIotServerAsyncMessage(*this, rc.getTransactionId(), &rc.getProxy());
+        async_msg->mCall_ID = rc.getOriginalRequest().header(h_CallID).value();//获取CALL_ID
+		async_msg->mFrom    = rc.getOriginalRequest().header(h_From).uri().host();//获取FROM
+		async_msg->mTo      = rc.getOriginalRequest().header(h_To).uri().host();//获取TO
+        std::auto_ptr<ApplicationMessage> pasync_msg(async_msg);
+		mAsyncDispatcher->post(pasync_msg);
+
+		if(g_mapCall_Object.find(async_msg->mCall_ID.c_str())==g_mapCall_Object.end())//插入本地内存保存会话
+		{
+			g_mapCall_Object[async_msg->mCall_ID.c_str()] = 1;//后续更改1为对象
+		}
+		return WaitingForEvent;
+	}
+}
+
+//异步处理流程（处理三个同步消息）
+bool
+PushIotServer::asyncProcess(AsyncProcessorMessage* msg)
+{
+	PushIotServerAsyncMessage* async = dynamic_cast<PushIotServerAsyncMessage*>(msg);
+	resip_assert(async);
+    
+	async->mQueryResultData = Data("888 Deal internal Message!");
+	//async->mSipServerData.uri().scheme() = "sip";
+	//async->mSipServerData.uri().user() = Data("");
+	//async->mSipServerData.uri().host() = Data("10.101.70.53");
+	async->mQueryResult = 0;
+
+	/*1.先向策略服务器拿媒体服务器IP*/
+	std::auto_ptr<ConServerSynClient> plySynClient(new ConServerSynClient(mSipConServerIP.c_str(),mSipConServerPort));
+	if(!plySynClient->ConnectServer())
+	{
+	    ErrLog(<< "Connect ConServer Server Failed");
+        return false;
+	}
+    std::string strIp;
+	int iPort;
+    SendConServerForMediaIpJson(plySynClient,strIp,iPort);
+    DebugLog(<<"ip = "<<strIp<<":port="<<iPort);	
+	/*2.向媒体服务器获取端口*/
+    mMediaServerPort = iPort;
+    sprintf((char*)mMediaServerIP.c_str(),"%s",strIp.c_str());
+	std::auto_ptr<ConServerSynClient> MediaClient(new ConServerSynClient(mMediaServerIP.c_str(),mMediaServerPort));
+	if(!MediaClient->ConnectServer())
+	{
+	    ErrLog(<< "Connect Media Server Failed");
+        return false;
+	}
+	std::string callId = async->mCall_ID.c_str();
+	SendMediaForMediaPortJson(MediaClient,callId);
+	/*3.向IOT发送需要推送的消息*/
+	std::auto_ptr<ConServerSynClient> IotClient(new ConServerSynClient(mIotServerIP.c_str(),mIotServerPort));
+	if(!IotClient->ConnectServer())
+	{
+	    ErrLog(<< "Connect Iot Server Failed");
+        return false;
+	}
+	std::string strFrom = async->mFrom.c_str();
+	std::string strTo   = async->mTo.c_str();
+	SendIotForPush(IotClient,strFrom,strTo);
+	return true;
+}
+
+//JSON转字符串
+std::string
+PushIotServer::ConverJason2String(rapidjson::Document &inroot)
+{
+    StringBuffer buffer;
+    Writer<StringBuffer> writer(buffer);
+    inroot.Accept(writer);
+    std::string sResultData = buffer.GetString();
+
+    return sResultData;
+}
+
+
+
+//拼接获取流媒体IP的JSON数据 
+void PushIotServer::SendConServerForMediaIpJson(std::auto_ptr<ConServerSynClient> plcli,std::string& strMediaIp,int & iport )
+{
+	rapidjson::Document oroot;
+	oroot.SetObject();
+	rapidjson::Document::AllocatorType &allocator = oroot.GetAllocator();
+
+    std::string method = CMD_NO_GET_MTS_REQ;
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int timestamp = tv.tv_sec;
+    //int reqID = 123;
+	std::string traceId = "88";
+	std::string spanId  = "88";
+
+	rapidjson::Value method_;
+    method_.SetString( method.c_str() , method.length() , allocator ) ;
+    oroot.AddMember("method", method_, allocator);
+    oroot.AddMember("timestamp", timestamp, allocator);
+	oroot.AddMember("req_id", timestamp, allocator);
+
+	rapidjson::Value traceid_;
+    traceid_.SetString( traceId.c_str() , traceId.length() , allocator ) ;
+    oroot.AddMember("traceId", traceid_, allocator);
+
+	rapidjson::Value spanid_;
+    spanid_.SetString( spanId.c_str() , spanId.length() , allocator ) ;
+    oroot.AddMember("spanId", spanid_, allocator);
+
+    string resultData = "";
+
+    InfoLog(<< "start Send Policy Server....");
+    
+    plcli->DoWrite(oroot);//发送消息给策略服务器
+    rapidjson::Document rspJsonData;
+
+    resultData = ConverJason2String(oroot);
+
+    InfoLog(<< "req ConServer data =" << resultData);
+    plcli->DoRead(rspJsonData);//解析策略服务器的返回JSON拿对应的数据
+    ParseMediaIP(rspJsonData,strMediaIp,iport);
+    InfoLog(<< "Get media serverip =" << strMediaIp << "Get media serverport"<<iport );
+}
+
+//拼接获取流媒体分配的端口的JSON数据
+void 
+PushIotServer::SendMediaForMediaPortJson(std::auto_ptr<ConServerSynClient> plcli,std::string callId)
+{
+	rapidjson::Document oroot;
+	oroot.SetObject();
+	rapidjson::Document::AllocatorType &allocator = oroot.GetAllocator();
+
+    std::string method = CMD_NO_REPORT_MTS_REQ;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int timestamp = tv.tv_sec;
+
+	std::string traceId = "77";
+	std::string spanId  = "77";
+
+	rapidjson::Value method_;
+    method_.SetString( method.c_str() , method.length() , allocator ) ;
+    oroot.AddMember("method", method_, allocator);
+
+    oroot.AddMember("timestamp", timestamp, allocator);
+	
+	oroot.AddMember("req_id", timestamp, allocator);
+
+	rapidjson::Value traceid_;
+    traceid_.SetString( traceId.c_str() , traceId.length() , allocator ) ;
+    oroot.AddMember("traceId", traceid_, allocator);
+
+	rapidjson::Value spanid_;
+    spanid_.SetString( spanId.c_str() , spanId.length() , allocator ) ;
+    oroot.AddMember("spanId", spanid_, allocator);
+	
+	rapidjson::Document params;
+	params.SetObject();
+	rapidjson::Document::AllocatorType &sallocator = params.GetAllocator();
+
+	rapidjson::Value params_;
+    params_.SetString( callId.c_str() , callId.length() , sallocator ) ;
+    params.AddMember("session_id", params_, sallocator);//获取会话ID为callid
+	oroot.AddMember("params", params, sallocator);
+
+	string resultData = "";
+
+    InfoLog(<< "start Send Media Server....");
+    
+    
+    plcli->DoWrite(oroot);//发送消息给策略服务器
+
+    resultData = ConverJason2String(oroot);
+
+    InfoLog(<< "req ConServer data =" << resultData);
+    rapidjson::Document rspJsonData;
+    plcli->DoRead(rspJsonData);//解析策略服务器的返回JSON拿对应的数据
+    ParseMediaPort(rspJsonData,mMediaPortData);
+    InfoLog(<< "Get media serverip =" << mMediaPortData.relay_callee_video_io_rtp_port );
+}
+
+//拼接发送给IOT的JSON数据
+void 
+PushIotServer::SendIotForPush(std::auto_ptr<ConServerSynClient> plcli,std::string strFrom,std::string strTo)
+{
+	rapidjson::Document oroot;
+	oroot.SetObject();
+	rapidjson::Document::AllocatorType &allocator = oroot.GetAllocator();
+
+    std::string method = CMD_NO_PUSH_IOT;
+
+	//time_t t = time(0);
+    //char ch[64];
+    //strftime(ch, sizeof(ch), "%Y-%m-%d %H-%M-%S", localtime(&t));
+    //string timestamp = ch;
+
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int timestamp = tv.tv_sec;
+
+	rapidjson::Value method_;
+    method_.SetString( method.c_str() , method.length() , allocator ) ;
+    oroot.AddMember("method", method_, allocator);
+
+	//rapidjson::Value timestamp_;
+    //timestamp_.SetString( timestamp.c_str() , timestamp.length() , allocator ) ;
+    //oroot.AddMember("timestamp", timestamp_, allocator);
+
+    oroot.AddMember("timestamp", timestamp, allocator);
+	
+	oroot.AddMember("req_id", timestamp, allocator);
+
+    std::string traceId = "66";
+    std::string spanId = "66";
+	rapidjson::Value traceid_;
+    traceid_.SetString( traceId.c_str() , traceId.length() , allocator ) ;
+    oroot.AddMember("traceId", traceid_, allocator);
+
+	rapidjson::Value spanid_;
+    spanid_.SetString( spanId.c_str() , spanId.length() , allocator ) ;
+    oroot.AddMember("spanId", spanid_, allocator);
+    std::string resultData = "";
+
+	rapidjson::Document params;
+	params.SetObject();
+	rapidjson::Document::AllocatorType &sallocator = params.GetAllocator();
+
+	rapidjson::Value srcAVURL;
+    srcAVURL.SetString( strFrom.c_str() , strFrom.length() , sallocator ) ;
+    params.AddMember("srcAVURL", srcAVURL, sallocator);//FROM
+
+	rapidjson::Value dstAVURL;
+    dstAVURL.SetString( strTo.c_str() , strTo.length() , sallocator ) ;
+    params.AddMember("dstAVURL", dstAVURL, sallocator);//To
+
+	std::string strLocalSipAddr = "127.0.0.1:5060";
+	rapidjson::Value sipURL;
+    sipURL.SetString( strLocalSipAddr.c_str() , strLocalSipAddr.length() , sallocator ) ;
+    params.AddMember("sipURL", sipURL, sallocator);//FROM
+
+	oroot.AddMember("params", params, sallocator);
+
+    InfoLog(<< "start Send IOT Server....");
+    
+    
+    plcli->DoWrite(oroot);//发送消息给策略服务器
+
+    resultData = ConverJason2String(oroot);
+
+    InfoLog(<< "req ConServer data =" << resultData);
+    rapidjson::Document rspJsonData;
+    plcli->DoRead(rspJsonData);//解析策略服务器的返回JSON拿对应的数据
+    ParseIotReturnPackage(rspJsonData);
+
+    InfoLog(<< "Get media serverip =" << mMediaPortData.relay_callee_video_io_rtp_port );
+}
+
+
+//解析JSON拿IP
+ void PushIotServer::ParseMediaIP(rapidjson::Document &inroot,std::string &strMediaIp,int& iport)
+{
+    do
+	{
+	    if (inroot.HasParseError() )
+        {
+            break;
+        }
+	    if (!inroot.IsObject() )
+        {
+            break;
+        }
+        if ( inroot.HasMember("result") && inroot["result"].IsObject() )
+        {
+           rapidjson::Value info_object(rapidjson::kObjectType);
+           info_object.SetObject();
+           info_object = inroot["result"].GetObject();
+		   if(info_object.HasMember("ip")&&info_object["ip"].IsString())
+		   {
+		       strMediaIp = info_object["ip"].GetString();
+		   }
+		   if(info_object.HasMember("port")&&info_object["port"].IsInt())
+		   {
+		       iport = info_object["port"].GetInt();
+		   }		   
+        }		
+	}while(0);
+
+    return ;
+}
+
+
+//解析JSON拿流媒体端口
+ void PushIotServer::ParseMediaPort(rapidjson::Document &inroot,MediaPortSource &AllPortData)
+{
+    do
+	{
+	    if (inroot.HasParseError() )
+        {
+            break;
+        }
+	    if (!inroot.IsObject() )
+        {
+            break;
+        }
+        if ( inroot.HasMember("result") && inroot["result"].IsObject() )
+        {
+           rapidjson::Value info_object(rapidjson::kObjectType);
+           info_object.SetObject();
+           info_object = inroot["result"].GetObject();
+		   if(info_object.HasMember("port")&&info_object["port"].IsObject())
+		   {
+		    	AllPortData.relay_caller_audio_rtp_port      = info_object["relay_caller_audio_rtp_port"].GetInt();
+				AllPortData.relay_caller_audio_rtcp_port     = info_object["relay_caller_audio_rtcp_port"].GetInt();
+				AllPortData.relay_caller_video_rtp_port      = info_object["relay_caller_video_rtp_port"].GetInt();
+				AllPortData.relay_caller_video_rtcp_port     = info_object["relay_caller_video_rtcp_port"].GetInt();
+				AllPortData.relay_callee_audo_io_rtp_port    = info_object["relay_callee_audo_io_rtp_port"].GetInt();
+				AllPortData.relay_callee_audo_io_rtcp_port   = info_object["relay_callee_audo_io_rtcp_port"].GetInt();
+				AllPortData.relay_callee_video_io_rtp_port   = info_object["relay_callee_video_io_rtp_port"].GetInt();
+				AllPortData.relay_callee_video_io_rtcp_port  = info_object["relay_callee_video_io_rtcp_port"].GetInt();
+		   }		   
+        }		
+	}while(0);
+
+    return;
+}
+
+
+//解析IOT的JSON回包
+void PushIotServer::ParseIotReturnPackage(rapidjson::Document &inroot)
+{
+    do
+	{
+	    if (inroot.HasParseError() )
+        {
+            break;
+        }
+	    if (!inroot.IsObject() )
+        {
+            break;
+        }
+        if ( inroot.HasMember("result") && inroot["result"].IsObject() )
+        {
+           rapidjson::Value info_object(rapidjson::kObjectType);
+           info_object.SetObject();
+           info_object = inroot["result"].GetObject();
+		   if(info_object.HasMember("ip")&&info_object["ip"].IsString())
+		   {
+		       //sipProxyIP = info_object["ip"].GetString();
+		   }
+		   if(info_object.HasMember("port")&&info_object["port"].IsInt())
+		   {
+		       //port = info_object["port"].GetInt();
+		   }		   
+        }		
+	}while(0);
+
+    return;
+}
+/*
+bool PushIotServer::NotifyMsgPost(const resip::ContactList& vdstContact, RequestContext& rc)
+{
+    return true;
+}
+*/
+/***
+bool PushIotServer::NotifyMsgPost(const resip::NotifyMessage& stNotifyMsg)
+{
+    return true;
+}
+****/

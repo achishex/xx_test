@@ -1,0 +1,36 @@
+# Copyright (c) 2018 Xingluo.  All rights reserved.
+#
+
+MakeAccelerator= $(ROOTDIR)/thirdpart/bin/ccache
+CPLUS = $(shell command -v $(MakeAccelerator) >/dev/null 2>&1 && echo "$(MakeAccelerator) g++" || echo "g++")
+CCOMP = $(shell command -v $(MakeAccelerator) >/dev/null 2>&1 && echo "$(MakeAccelerator) gcc" || echo "gcc")
+LINKER= gcc
+AR = ar
+RANLIB = ranlib
+C++ = $(CPLUS)
+CC = $(CCOMP)
+LINK = $(LINKER)
+COMPILER_FLAGS=-D_REENTRANT -D__USE_POSIX -D__linux__ -pipe
+INCLUDE_FLAG = -include
+CCFLAGS += $(COMPILER_FLAGS) -Wall
+LINKOPTS = -Wl,-rpath=.
+CORE_LINK_LIBS= -lpthread -ldl -lm -lstdc++ -lcrypt
+SHARED= -shared
+
+# OPTIMIZATION
+CCFLAGS += -ggdb -g3 -g 
+#CCFLAGS += -O3 
+
+.SUFFIXES: .cpp .cxx .c .o
+
+.cpp.o:
+	$(C++) -c -o $*.o  $(CCFLAGS) $(C++FLAGS) $*.cpp
+
+.cxx.o:
+	$(C++) -c -o $*.o  $(CCFLAGS) $(C++FLAGS) $*.cxx
+
+.c.o:
+	$(CC) -c -o $*.o  $(CCFLAGS) $*.c
+
+
+

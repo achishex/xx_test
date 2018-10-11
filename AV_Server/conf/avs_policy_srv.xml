@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<Config> 
+  <PolicyServer> 
+    <!--策略服务对外提供tcp服务ip-->  
+    <IP>10.101.70.52</IP>  
+
+    <!--策略服务对外提供tcp服务端口-->  
+    <Port>7878</Port>  
+
+    <!--策略服务内部工作线程-->  
+    <Threadnums>1</Threadnums>  
+
+    <!--通知策略信息落盘定时器时间, 单位为 second-->  
+    <NotifyTimerTm>300</NotifyTimerTm>  
+	
+	<!--redis超时时间, 单位为 second--> 
+	<RedisExpireTm>400</RedisExpireTm>
+
+    <!--接收其他服务上报数据上报间隔 -->  
+    <ReportTm>3</ReportTm> 
+
+    <!-- proxy debug conf -->
+    <ProxyIpDebug>10.101.70.109</ProxyIpDebug>
+    <ProxyPortDebug>5060</ProxyPortDebug>
+  </PolicyServer>  
+  <RedisNode> 
+    <!--策略信息落盘的redis节点ip -->  
+    <IP>192.168.1.100</IP>  
+    <!-- 策略信息落盘的redis节点port -->  
+    <Port>6397</Port>  
+    <!-- 连接redis节点的最大连接数-->  
+    <MaxConnNum>10</MaxConnNum>  
+    <!--redis db 索引下标 -->  
+    <DbIndex>5</DbIndex>  
+    <!--redis连接超时时间 -->  
+    <ConnIdleMaxMs>100</ConnIdleMaxMs> 
+  </RedisNode> 
+  <Log>
+      <!-- 日志属性文件名,默认值即可 -->
+      <logPropertiesFileName>avs_policy_log.properties</logPropertiesFileName>
+
+      <!-- 日志属性文件绝对路径名,默认值即可 -->
+      <logPropertiesFilePath>/data/achilsh/AV_Server_xl/xlavserver/30_av_server/AV_Server/conf/</logPropertiesFilePath>
+  </Log>
+</Config>

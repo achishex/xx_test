@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<Config> 
+  <MediaServer> 
+    <!-- 媒体服务对外提供的tcp ip -->  
+    <IP>0.0.0.0</IP>  
+
+    <!-- 媒体服务对外提供的tcp port -->  
+    <Port>10010</Port>  
+
+    <!-- 中转数据线程数-->  
+    <ThreadNumber>10</ThreadNumber>  
+
+    <!-- 策略服务的ip -->  
+    <PolicyIP>10.101.70.109</PolicyIP>  
+    
+    <!-- 策略服务的port -->  
+    <PolicyPort>8751</PolicyPort> 
+
+    <!-- 负载上报时间间隔,单位为秒 -->
+    <ReportTm>5</ReportTm>
+
+    <!--媒体服务外网服务Ip -->
+    <InternetIP>39.108.12.205</InternetIP>
+
+    <!--媒体服务外网服务端口-->
+    <InternetPort>10010</InternetPort>
+  </MediaServer>  
+
+  <PortPool> 
+    <!-- 中转udp时分配端口池起始值 -->  
+    <udpPortStart>20000</udpPortStart>  
+
+    <!-- 中转udp时分配端口池容量 -->  
+    <udpPortCount>5000</udpPortCount> 
+  </PortPool> 
+
+  <UdpServer>
+      <!-- 内部udp服务 listen ip -->
+      <IP>10.101.70.109</IP>
+
+      <!-- 内部udp服务 listen port -->
+      <Port>30000</Port>
+  </UdpServer>
+
+  <Log>
+      <!-- 日志属性文件名,默认值即可 -->
+      <logPropertiesFileName>avs_mts_log.properties</logPropertiesFileName>
+
+      <!-- 日志属性文件绝对路径名,默认值即可 -->
+      <logPropertiesFilePath>/data/achilsh/AV_Server_xl/xlavserver/30_av_server/AV_Server/conf/</logPropertiesFilePath>
+  </Log>
+</Config>

@@ -1,0 +1,46 @@
+#ROOT_DIR= ..
+ThirdPathDir=$(ROOT_DIR)/thirdpart
+
+ThirdPathInclude=$(ThirdPathDir)/include
+ThirdPathLib=$(ThirdPathDir)/lib
+
+LibeventInclude=$(ThirdPathInclude)/libevent
+LibeventLib=$(ThirdPathLib)/libevent
+#
+LibHiredisInclude=$(ThirdPathInclude)/hiredis
+LibHiredisLib=$(ThirdPathLib)/hiredis
+
+LibrapidxmlInclude=$(ThirdPathInclude)/rapidxml
+#
+Log4CppInclude=$(ThirdPathDir)/include/log4cpp
+Log4CppLib=$(ThirdPathDir)/lib/log4cpp
+#
+RapidJsonDir=$(ThirdPathDir)/include/rapidjson
+#
+LibTcmallocLib=$(ThirdPathDir)/lib/tcmalloc
+LibTcmallocInclude=$(ThirdPathDir)/include/tcmalloc
+#
+CommonDir=$(ROOT_DIR)/common
+LogAVSDir=$(CommonDir)/log
+ConfParseDir=$(CommonDir)/conf_parse
+UtilDir=$(CommonDir)/util
+RedisClientDir=$(CommonDir)/RedisClientPool
+ProtoInnerDir=$(CommonDir)/protocol
+
+ARCH:=$(shell uname -m)
+
+ARCH32:=i686
+ARCH64:=x86_64
+
+ifeq ($(ARCH),$(ARCH64))
+    SYSTEM_LIB_PATH:=/usr/lib64
+else
+    SYSTEM_LIB_PATH:=/usr/lib
+endif
+export SYSTEM_LIB_PATH
+#
+MakeAccelerator=$(ThirdPathDir)/bin/ccache
+CXX = $(shell command -v $(MakeAccelerator) >/dev/null 2>&1 && echo "$(MakeAccelerator) g++" || echo "g++")
+CC  = $(shell command -v $(MakeAccelerator) >/dev/null 2>&1 && echo "$(MakeAccelerator) gcc" || echo "gcc")
+CXXFLAGS = -g -O0 -fPIC -ggdb -Wall -ftemplate-depth-128 -std=c++11
+LDFLAGS = -Wl,-Bsymbolic -Wl,--enable-new-dtags 

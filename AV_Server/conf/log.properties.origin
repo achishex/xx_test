@@ -1,0 +1,105 @@
+# ------------定义rootCategory的属性---------------------------
+# 指定rootCategory的log优先级是ERROR，其Appender可以同时有多个，注释掉例子分别是console, file, roll
+# EMERG >= FATAL > ALERT > CRIT > ERROR > WARN > NOTICE > INFO > DEBUG > NOTSET(NULL)，调用日志时分别有同名函数与其一一对应，即
+# EMERG(), FATAL() ALERT() CRIT() ERROR() WARN() NOTICE() INFO() DEBUG()
+#rootCategory=DEBUG, root, file, roll
+rootCategory=DEBUG, root, file
+
+
+# 定义rootCategory的派生类
+# 不在父类(rootCategory)中输出
+Category.console=DEBUG, console
+Category.file=DEBUG, file
+Category.roll=DEBUG, roll
+additivity.consle=false
+additivity.file=false
+additivity.roll=false
+
+# ------------定义root的属性--------------------------------
+# consoleAppender类型:控制台输出
+#下面语句分别表示：appender类型、布局、输出格式
+appender.root=ConsoleAppender
+appender.root.layout=PatternLayout
+appender.root.layout.ConversionPattern=[%d{%Y-%m-%d %H:%M:%S,%l}] [%p] [%t] : %m%n
+
+
+# ------------定义console的属性--------------------------------
+# consoleAppender类型:控制台输出
+#下面语句分别表示：appender类型、布局、输出格式
+#appender.console=ConsoleAppender
+#appender.console.layout=PatternLayout
+#appender.console.layout.ConversionPattern=[%d{%Y-%m-%d %H:%M:%S,%l}] [%p] : %m%n
+
+
+#------------定义file的属性-----------------------------------
+# FileAppender类型：输出到文件
+#下面语句分别表示：appender类型、不覆盖指定文件、优先级、文件名称、布局、输出格式
+appender.file=FileAppender
+appender.file.append=false
+appender.file.threshold=DEBUG
+appender.file.fileName=./file.log
+appender.file.layout=PatternLayout
+appender.file.layout.ConversionPattern=[%d{%Y-%m-%d %H:%M:%S,%l}] [%p] : %m%n
+
+
+#------定义roll的属性--------------------------------
+#RollingFileAppender：输出到回卷文件，文件超过一定大小之后生成一个新的文件
+#下面语句分别表示：appender类型、不覆盖指定文件、优先级、文件名称、布局，文件自动回滚大小阈值10MB(默认20KB)、可产生文件数量阈值(默认5个)、输出格式
+#appender.roll=RollingFileAppender
+#appender.roll.append=true
+#appender.roll.threshold=DEBUG
+#appender.roll.fileName=./roll.log
+#appender.roll.layout=PatternLayout
+#appender.roll.maxFileSize=10485760
+#appender.roll.maxBackupIndex=5
+#appender.roll.layout.ConversionPattern=[%d{%Y-%m-%d %H:%M:%S,%l}] [%p] : %m%n
+
+
+# 附1：appender 格式
+# BasicLayout.hh"		//这个过于简单,不建议使用
+# PatternLayout.hh"		//建议用这个
+# SimpleLayout.hh"		//不建议使用
+
+
+# 附2：输出格式
+# （1）"%%"，转义为%, 即，std::string pattern = "%%" 时输出: "%"
+# （2）"%c"，输出logger名称，比如std::string pattern ="%c" 时输出: "test_logger.subtest"，
+#      也可以控制logger名称的显示层次，比如"%c{1}"时输出"test_logger"，其中数字表示层次。
+# （3）"%D"，显示本地时间，当std::string pattern ="%D" 时输出:"2004-10-16 18:55:45"，%d显示标准时间，
+#      所以当std::string pattern ="%d" 时输出 "2004-10-16 10:55:45" （因为我们是东8区，差8个小时啊）。
+#      可以通过%d{...}定义更详细的显示格式，比如%d{%H:%M:%s}表示要显示小时:分钟：秒。大括号中可显示的
+#      预定义标识符如下：
+# %a -- 表示礼拜几，英文缩写形式，比如"Fri"
+# %A -- 表示礼拜几，比如"Friday"
+# %b -- 表示几月份，英文缩写形式，比如"Oct"
+# %B -- 表示几月份，"October"
+# %c -- 标准的日期＋时间格式，如 "Sat Oct 16 18:56:19 2004"
+# %d -- 表示今天是这个月的几号(1-31)"16"
+# %H -- 表示当前时刻是几时(0-23)，如 "18"
+# %I -- 表示当前时刻是几时(1-12)，如 "6"
+# %j -- 表示今天是哪一天(1-366)，如 "290"
+# %m -- 表示本月是哪一月(1-12)，如 "10"
+# %M -- 表示当前时刻是哪一分钟(0-59)，如 "59"
+# %p -- 表示现在是上午还是下午， AM or PM
+# %q -- 表示当前时刻中毫秒部分(0-999)，如 "237"
+# %Q -- 表示当前时刻中带小数的毫秒部分(0-999.999)，如 "430.732"
+# %S -- 表示当前时刻的多少秒(0-59)，如 "32"
+# %U -- 表示本周是今年的第几个礼拜，以周日为第一天开始计算(0-53)，如 "41"
+# %w -- 表示礼拜几，(0-6, 礼拜天为0)，如 "6"
+# %W -- 表示本周是今年的第几个礼拜，以周一为第一天开始计算(0-53)，如 "41"
+# %x -- 标准的日期格式，如 "10/16/04"
+# %X -- 标准的时间格式，如 "19:02:34"
+# %y -- 两位数的年份(0-99)，如 "04"
+# %Y -- 四位数的年份，如 "2004"
+# %Z -- 时区名，比如 "GMT"
+# （4）"%F"，输出当前记录器所在的文件名称，比如std::string pattern ="%F" 时输出: "main.cpp"
+# （5）"%L"，输出当前记录器所在的文件行号，比如std::string pattern ="%L" 时输出: "51"
+# （6）"%l"，输出当前记录器所在的文件名称和行号，比如std::string pattern ="%L" 时输出: "main.cpp:51"	//验证没用，以后再研究下。
+# （7）"%m"，输出原始信息，比如std::string pattern ="%m" 时输出: "teststr"，即 Log.emerg(str) 函数调用中str的内容。
+# （8）"%n"，换行符，没什么好解释的
+# （9）"%p"，输出LogLevel，比如std::string pattern ="%p" 时输出: "DEBUG"
+# （10）"%t"，输出记录器所在的线程ID，比如std::string pattern ="%t" 时输出: "1075298944"
+# （11）"%x"，嵌套诊断上下文NDC (nested diagnostic context) 输出，从堆栈中弹出上下文信息，NDC可以用对
+#       不同源的log信息（同时地）交叉输出进行区分，关于NDC方面的详细介绍会在下文中提到。
+# （12）格式对齐，比如std::string pattern ="%-10m"时表示左对齐，宽度是10，此时会输出"teststr  "，当
+#       然其它的控制字符也可以相同的方式来使用，比如"%-12d"，"%-5p"等等。

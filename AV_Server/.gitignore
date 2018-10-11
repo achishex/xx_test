@@ -1,0 +1,13 @@
+tags
+*/*.o
+*/tags
+*/*/*.o
+media_server/media_server
+policy_server/policy_server
+common/*/*/*.o
+common/*/*/*/*.o
+common/*/*.[so|a]
+common/*/*/*.[a|so]
+common/*/*/*/*.[a|so]
+registrar_server/registrar_server
+bin/*_server
