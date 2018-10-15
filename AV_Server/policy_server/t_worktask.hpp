@@ -31,6 +31,11 @@
 #include  <event2/buffer.h>
 #include  <event.h>
 
+#include  "LockQueue.h"
+#include "t_req_conn_node.h"
+#include "t_pools.hpp"
+
+using namespace util;
 
 namespace T_TCP
 {
@@ -39,8 +44,24 @@ namespace T_TCP
     {
      public:
       WorkerTask();
-      WorkerTask(pthread_mutex_t* pInitLock, pthread_cond_t* pInitCond, int* pInitNums, int iWorkId);
+      WorkerTask(pthread_mutex_t* pInitLock, pthread_cond_t* pInitCond, std::atomic<int>* pInitNums, int iWorkId);
       virtual ~WorkerTask();
+
+      /**
+       * @brief: SetData 
+       * 在分发线程池中的每个线程上保存 连接连接队列，分发线程作为消费者取出连接节点，向工作
+       * 线程转发该连接
+       * @param QConnNode
+       */
+      void SetData( std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType> > >& QConnNode );
+
+      /**
+       * @brief: SetThreadPool 
+       * 在分发线程池中保存实际业务线程池，前者中的每个线程在取到节点后向后者派
+       * 发
+       * @param pThreadPool
+       */
+      void SetThreadPool( PthreadPools<WorkerTask, std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>>* pThreadPool );
 
       int GetWorkId() const 
       {
@@ -104,6 +125,8 @@ namespace T_TCP
 
     private:
      void FlushNodeLoadToDb();
+
+     void MainLoop();
     
     private:
      int m_iNotifyRecvFd;
@@ -117,6 +140,8 @@ namespace T_TCP
      //
      std::map<int, ConnBase*> m_mpAcceptConn; //need not lock
      int m_iWorkId;
+     std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>> m_reqConnQueue;
+     PthreadPools<WorkerTask, std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>>* m_pThreadPool;
     };
 }
 

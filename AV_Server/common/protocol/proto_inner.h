@@ -9,7 +9,8 @@
 #define     CMD_NO_REPORT_MTS_REQ       "report_mts_req"    /*复用注册流程 **/
 #define     CMD_NO_GET_SIP_REQ          "get_sip_req"
 #define     CMD_NO_GET_MTS_REQ          "get_mts_req"
-#define     CMD_NO_PUSH_IOT             "push_msg"
+#define     CMD_NO_PUSH_IOT             "push_msg"          /*推送IOT消呼叫息*/
+#define     CMD_NO_AUTH_PUSH_IOT        "um_sip_call_auth"  /*推送IOT鉴权消息*/
 
 #define     CMD_NO_ALLOCATE_RELAY_PORT_REQ      "allocate_relay_port_req"
 #define     CMD_NO_RELEASE_RELAY_PORT_REQ       "release_relay_port_req"

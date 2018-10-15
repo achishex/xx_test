@@ -139,10 +139,10 @@ void AvsMtsInstance::Run()
         MTS_LOG_ERROR("srv: %s init fail !!!", avs_mts_srv_name);
         return ;
     }
-
+    MtsTcp mtsTcpInstance(m_sIp, m_uiPort);
+    
     std::string sLocalInternetIp = ConfigXml::Instance()->getValue("MediaServer","InternetIP");
     unsigned int uiLocalInternetPort = ::atoi( ConfigXml::Instance()->getValue("MediaServer", "InternetPort" ).c_str());
-    MtsTcp mtsTcpInstance(m_sIp, m_uiPort);
     
     mtsTcpInstance.SetLocalInternetIp(sLocalInternetIp);
     mtsTcpInstance.SetLocalInternetPort(uiLocalInternetPort);

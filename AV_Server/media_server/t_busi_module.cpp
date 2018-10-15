@@ -85,9 +85,7 @@ bool PolicyBusi::BuildRespDoc(rapidjson::Document &oRoot)
     return true;
 }
 
-
-bool PolicyBusi::SendToUdpSrv(const std::string& sIP, unsigned short usPort, 
-                              const RelayPortRecord& relayRecord)
+bool PolicyBusi::SendToUdpSrv(const RelayPortRecord& relayRecord)
 {
-    return p_mtsTcp->SendToUdpSrvCmd(sIP, usPort, (void*)&relayRecord, sizeof(relayRecord));
+    return p_mtsTcp->SendToUdpSrvCmd((void*)&relayRecord, sizeof(relayRecord));
 }

@@ -99,20 +99,23 @@ bool OpenChannel::ProcessBusi(const rapidjson::Document &inRoot,
         pairPort.second = oneRelaySession.usCalleeVRtcpPort;
         p_mtsTcp->GetPortPool()->RecycleUdpPort(pairPort);
         
-        MTS_LOG_ERROR("allocat relay port from port pool fail,sessionid: %s", sSessionId.c_str());
-        
+        MTS_LOG_ERROR( "allocate relay port err,"
+                      "surplus port nums: %u,"
+                      "port pool item nums: %u,"
+                      "port info: %s",
+                      p_mtsTcp->GetPortPool()->GetUsablePortNums(),
+                      p_mtsTcp->GetPortPool()->GetPortPoolCap(),
+                      oneRelaySession.ToString().c_str() );
+
         m_stResp.iCode      = -1;
         m_stResp.sErrMsg    = "allocate relay udp port fail";
         PolicyBusi::BuildRespDoc(oRoot);
         return false;
     }
     
-    const std::string& sUdpIp   = p_mtsTcp->GetUdpSrvIp(); 
-    unsigned short usUdpPort    = p_mtsTcp->GetUdpSrvPort();
-   
     unsigned short usCmd        = UDP_CMD_ALLOC_PORT;
     oneRelaySession.usRelayCmd  = usCmd;
-    bool bRet = SendToUdpSrv(sUdpIp,usUdpPort,oneRelaySession); 
+    bool bRet = SendToUdpSrv(oneRelaySession); 
     if (bRet == false)
     {
         MTS_LOG_ERROR("send open channel cmd: %d, to udp srv fail, session id: %s", 
@@ -211,7 +214,7 @@ bool ReleaseChannel::ProcessBusi(const rapidjson::Document &inRoot, rapidjson::D
         MTS_LOG_ERROR("session has not exist, session id: %s", sSessionId.c_str());
 
         m_stResp.iCode      = -1;
-        m_stResp.sErrMsg    = "session has exist";
+        m_stResp.sErrMsg    = "session has not exist";
         PolicyBusi::BuildRespDoc(oRoot);
         return false;
     }
@@ -252,13 +255,10 @@ bool ReleaseChannel::ProcessBusi(const rapidjson::Document &inRoot, rapidjson::D
                   oneRelaySession.usCalleeVRtcpPort,
                   sSessionId.c_str());
 
-    const std::string& sUdpIp   = p_mtsTcp->GetUdpSrvIp(); 
-    unsigned short usUdpPort    = p_mtsTcp->GetUdpSrvPort();
-
     unsigned short usCmd        = UDP_CMD_RELEASE_PORT;
     oneRelaySession.usRelayCmd  = usCmd;
 
-    bool bRet = SendToUdpSrv(sUdpIp,usUdpPort,oneRelaySession); 
+    bool bRet = SendToUdpSrv(oneRelaySession); 
     if (bRet == false)
     {
         MTS_LOG_ERROR("send open channel cmd: %d, to udp srv fail, session id: %s", 

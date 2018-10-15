@@ -20,25 +20,26 @@
 #include "avs_mts_log.h"
 #include <string>
 
+#include "LockQueue.h"
+#include "t_PortPools.h"
+#include <atomic>
+
+using namespace util;
 class MtsUdp
 {
     public:
-     MtsUdp(const std::string& sIp, unsigned short usPort);
+     MtsUdp(std::shared_ptr<LockQueue<std::shared_ptr<RelayPortRecord>>> queueSession);
      virtual ~MtsUdp();
     
      void UdpThreadCallback();
+     void ShutDown()
+     {
+         m_bExit = true;
+     }
 
     private:
-     bool Init();
-     bool Run();
-     static void EventCallback(int fd, short event, void *arg);
-
-    private:
-     std::string    m_sIp;
-     unsigned short m_usPort;
-     int            m_iSock;
-     struct event*          m_pEvent;
-     struct event_base*     m_pEventBase;
+     std::shared_ptr<LockQueue<std::shared_ptr<RelayPortRecord>>> m_pSessionQue;
+     std::atomic<bool> m_bExit;
 };
 
 #endif

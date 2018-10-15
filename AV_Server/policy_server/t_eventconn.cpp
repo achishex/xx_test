@@ -12,6 +12,9 @@
 
 namespace T_TCP
 {
+
+    std::map<std::string, std::shared_ptr<PolicyBusi>> AcceptConn::m_mpBusiModule = AcceptConn::BuildBusiModule(); 
+
     AcceptConn::AcceptConn(int ifd, void* pData)
         :ConnBase(ifd), m_pData((WorkerTask*)pData),m_pCodec(NULL)
     {
@@ -20,7 +23,6 @@ namespace T_TCP
         pRecvBuff = new CBuffer();
         pSendBuff = new CBuffer();
         
-        InitBusiModulePool();
     }
 
     AcceptConn::~AcceptConn()
@@ -243,45 +245,47 @@ namespace T_TCP
         if (sMethod.empty())
         {
             return tmpRet; 
-            //return (std::shared_ptr<PolicyBusi> emptyModule(nullptr));
         }
 
-        auto itBusiModule = m_mpBusiModule.find(sMethod);
-        if (itBusiModule != m_mpBusiModule.end())
+        auto itBusiModule = AcceptConn::m_mpBusiModule.find(sMethod);
+        if (itBusiModule != AcceptConn::m_mpBusiModule.end())
         {
+            PL_LOG_DEBUG("find busi module by method: %s, module map size: %u",
+                         sMethod.c_str(), AcceptConn::m_mpBusiModule.size());
             return itBusiModule->second;
         }
         else 
         {
             PL_LOG_ERROR("not find method process obj, method: %s", sMethod.c_str());
             return tmpRet; 
-            //return (std::shared_ptr<PolicyBusi> emptyModule(nullptr));
         }
     }
 
-    void AcceptConn::InitBusiModulePool()
+    std::map<std::string, std::shared_ptr<PolicyBusi>> AcceptConn::BuildBusiModule()
     {
-        m_mpBusiModule.clear();
+        std::map<std::string, std::shared_ptr<PolicyBusi>>  tmp_m_mpBusiModule;
+        tmp_m_mpBusiModule.clear();
         
-        m_mpBusiModule[CMD_NO_REGISTER_SIP_REQ] = 
+        tmp_m_mpBusiModule[CMD_NO_REGISTER_SIP_REQ] = 
             std::make_shared<RegisterInterface>(RegisterInterface(CMD_NO_REGISTER_SIP_REQ));
         
-        m_mpBusiModule[CMD_NO_REPORT_SIP_REQ] = 
+        tmp_m_mpBusiModule[CMD_NO_REPORT_SIP_REQ] = 
             std::make_shared<RegisterInterface>(RegisterInterface(CMD_NO_REPORT_SIP_REQ));
         
-        m_mpBusiModule[CMD_NO_GET_SIP_REQ] 
+        tmp_m_mpBusiModule[CMD_NO_GET_SIP_REQ] 
             = std::make_shared<NodeAllocate>(NodeAllocate(CMD_NO_GET_SIP_REQ));
         
-        m_mpBusiModule[CMD_NO_REGISTER_MTS_REQ]
+        tmp_m_mpBusiModule[CMD_NO_REGISTER_MTS_REQ]
             = std::make_shared<RegisterInterface>(RegisterInterface(CMD_NO_REGISTER_MTS_REQ));
         
-        m_mpBusiModule[CMD_NO_REPORT_MTS_REQ]
+        tmp_m_mpBusiModule[CMD_NO_REPORT_MTS_REQ]
             = std::make_shared<RegisterInterface>(RegisterInterface(CMD_NO_REPORT_MTS_REQ));
         
-        m_mpBusiModule[CMD_NO_GET_MTS_REQ] 
+        tmp_m_mpBusiModule[CMD_NO_GET_MTS_REQ] 
             = std::make_shared<NodeAllocate>(NodeAllocate(CMD_NO_GET_MTS_REQ));
 
-        PL_LOG_DEBUG("register busi process module succ, module nums: %d", m_mpBusiModule.size());
+        PL_LOG_DEBUG("register busi process module succ, module nums: %d", tmp_m_mpBusiModule.size());
+        return tmp_m_mpBusiModule;
     }
 
     std::string AcceptConn::GetKeyItemVal(const std::string& sKey, rapidjson::Document &root)

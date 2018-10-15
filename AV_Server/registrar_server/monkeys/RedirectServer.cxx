@@ -106,8 +106,30 @@ RedirectServer::applyActionResult(RequestContext &rc, const Data& actionResult, 
 		    //!RjS! This doesn't look exception safe - need guards
 		    mStore.lockRecord(inputUri);
 
+            Data inputUriIndex = inputUri.toString();
+			Data refixSip("sip:");
+            Data refixP2P("P2P_");
+			Data refixAll("sip:P2P_");
+			Data inputUriIndexParsed;
+
+            InfoLog(<< "Get URI: " << inputUriIndex );
+			
+            if(inputUriIndex.prefix(refixAll))
+            {
+                //如果请求的是p2p的请求，则需要把前缀去掉
+                inputUriIndexParsed = refixSip;
+                inputUriIndexParsed += inputUriIndex.substr(refixAll.size(), inputUriIndex.size() - refixAll.size());
+                inputUriIndex = inputUriIndexParsed;
+
+				InfoLog(<< "Parse URI: " << inputUriIndex << " with p2p type ");
+            }
+
+	        resip::Uri inputUriKey(inputUriIndex);
+
+            InfoLog(<< "Get contact: " << inputUriKey << " from contacts ");
+			
 		    resip::ContactList contacts;
-		    mStore.getContacts(inputUri,contacts);			
+		    mStore.getContacts(inputUriKey,contacts);			
 
             mStore.unlockRecord(inputUri);
 

@@ -21,6 +21,7 @@
 #endif
 
 #include <iostream>
+#include <atomic>
 
 namespace T_TCP
 {
@@ -29,7 +30,7 @@ class PthreadBase
 {
     public:
      PthreadBase();
-     PthreadBase(pthread_mutex_t* pInitLock, pthread_cond_t* pInitCond, int* pInitNums);
+     PthreadBase(pthread_mutex_t* pInitLock, pthread_cond_t* pInitCond, std::atomic<int>* pInitNums);
      virtual ~PthreadBase();
      void Start();
      void JoinWork();
@@ -77,7 +78,7 @@ class PthreadBase
      // add pthread pool init data struction, 经构造函数参数传入.
      pthread_mutex_t* m_pInitLock;
      pthread_cond_t*  m_pInitCond;
-     int*  m_pReadyThreadNums;
+     std::atomic<int>*  m_pReadyThreadNums;
 };
 
 ///////

@@ -15,14 +15,14 @@ namespace T_TCP
 
     WorkerTask:: WorkerTask(pthread_mutex_t* pInitLock,
                             pthread_cond_t* pInitCond, 
-                            int* pInitNums, 
+                            std::atomic<int>* pInitNums, 
                             int iWorkId): PthreadBase(pInitLock, pInitCond, pInitNums), 
                             m_iNotifyRecvFd(-1),
                             m_iNofitySendFd(-1), 
                             m_PthreadEventBase(NULL),
                             m_pConnItemList(NULL),
                             m_pConnItemListFree(NULL),
-                            m_iWorkId(iWorkId)
+                            m_iWorkId(iWorkId), m_pThreadPool(NULL)
     { }
 
     WorkerTask::~WorkerTask()
@@ -57,12 +57,22 @@ namespace T_TCP
             m_pPipNotifyConn = NULL;
         }
 
-        event_base_free(m_PthreadEventBase);
+        if (m_PthreadEventBase)
+        {
+            event_base_free(m_PthreadEventBase);
+        }
         m_PthreadEventBase = NULL;
     }
 
     int WorkerTask::Init() 
     {
+        if ( m_reqConnQueue != nullptr )
+        {
+            PL_LOG_INFO("worker task is for dispatch req conn, need not init event, pid: %lu", GetThreadId());
+            return 0;
+        }
+        PL_LOG_INFO("is worker task, pid: %lu, go on....", GetThreadId());
+
         struct event_config *ev_config = event_config_new();
         event_config_set_flag(ev_config, EVENT_BASE_FLAG_NOLOCK);
         m_PthreadEventBase = event_base_new_with_config(ev_config);
@@ -103,8 +113,9 @@ namespace T_TCP
     {
         RegistePthreadToPool();
         
-        event_base_dispatch(m_PthreadEventBase);
-        PL_LOG_INFO("thread: %d  exit", GetThreadId());
+        MainLoop();
+
+        PL_LOG_INFO("thread: %lu exit", GetThreadId());
         m_bRun = false;
         return 0;
     }
@@ -134,7 +145,7 @@ namespace T_TCP
 
             AcceptConn* pAcceptConn = new AcceptConn(iConnFd, this);
             AddRConn(pAcceptConn);
-            PL_LOG_DEBUG("from pipe, recv new conn fd: %d", iConnFd);
+            PL_LOG_DEBUG("from pipe, recv new conn fd: %d, this work thread id: %d", iConnFd, GetWorkId());
 
             m_mpAcceptConn.insert(std::pair<int, ConnBase*>(iConnFd, pAcceptConn)); //when close iFd, delete pConn
             return true;
@@ -145,32 +156,7 @@ namespace T_TCP
         {
             case 'c':
                 {
-#if 0
-                    if (m_pConnItemList == NULL || m_pConnItemListFree == NULL)
-                    {
-                        return false;
-                    }
-                    //从队列中取出一个新连接请求.
-                    QueueItem item;
-                    bool bRet = m_pConnItemList->DeQue(&item);
-                    if (bRet == false)
-                    {
-                        PL_LOG_ERROR("get conn node from pip fail");
-                        return false;
-                    }
-
-                    int iFd = 0;
-                    iFd = item.iConnFd;
-                    //发起一个连接, 需要从连接池中分配一个空闲连接
-                    AcceptConn* pAcceptConn = new AcceptConn(iFd, this);
-                    AddRConn(pAcceptConn);
-                    PL_LOG_DEBUG("from pipe, new conn fd: %d", iFd);
-
-                    m_mpAcceptConn.insert(std::pair<int, ConnBase*>(iFd, pAcceptConn)); //when close iFd, delete pConn
-
-                    item.iConnFd = -1;
-                    m_pConnItemListFree->EnQue(item);
-#endif
+                    PL_LOG_ERROR("not been used, dangous!!!!");
                 }
                 break;
 
@@ -243,5 +229,74 @@ namespace T_TCP
     void WorkerTask::FlushNodeLoadToDb()
     {
         NodeLoadCollection::Instance()->FlushDB();
+    }
+
+
+    void WorkerTask::SetData( std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>& QConnNode )
+    {
+        m_reqConnQueue = QConnNode;
+    }
+
+    void WorkerTask::MainLoop()
+    {
+        if (m_reqConnQueue == nullptr)
+        {
+            PL_LOG_INFO("into task work main loop,pid: %lu", GetThreadId());
+            event_base_dispatch(m_PthreadEventBase);
+            return ;
+        }
+
+        PL_LOG_INFO("into dispatch req conn main loop, pid: %lu", GetThreadId());
+
+        int iTmoutConnVal = 30; //60 second.
+        std::shared_ptr<ConnNodeType> ptrconnNode(nullptr);
+        while(true)
+        {
+            ptrconnNode = (nullptr);
+            m_reqConnQueue->Get( &ptrconnNode );
+            if (ptrconnNode == nullptr)
+            {
+                PL_LOG_ERROR("get new conn is empty node");
+                continue;
+            }
+            PL_LOG_DEBUG("get new conn from queue, conn: %s", ptrconnNode->ToString().c_str());
+            
+            int iDiffTm = time(NULL) - ptrconnNode->m_tmAccept;
+            if ( iDiffTm > iTmoutConnVal)
+            {
+                PL_LOG_ERROR("conn is old, close fd, diff tm: %ds, conn: %s", iDiffTm, ptrconnNode->ToString().c_str());
+                ::close(ptrconnNode->m_iAccptFd);
+                continue;
+            }
+
+            //从业务/工作线程池中分配一个事件线程，用于独立接收报文和发送报文.
+            //so,需要有个线程池.
+            WorkerTask* pFreeTaskWork = m_pThreadPool->AllocateThread();
+            if (pFreeTaskWork == NULL)
+            {
+                ::close(ptrconnNode->m_iAccptFd);
+                PL_LOG_ERROR("get free work task thread from pool fail, conn client ip: %s", 
+                             ptrconnNode->m_sPeerIp.c_str());
+                continue;
+            }
+            
+            char buf[4] = {0};
+            unsigned int iNetFd = ::htonl(ptrconnNode->m_iAccptFd);
+            memcpy(buf, &iNetFd, sizeof(buf));
+            if (false == pFreeTaskWork->NotifySendConn(buf, sizeof(buf)))
+            {
+                PL_LOG_ERROR("send req conn fd fail, fd: %d", ptrconnNode->m_iAccptFd);
+                close(ptrconnNode->m_iAccptFd);
+                continue;
+            }
+
+            PL_LOG_DEBUG("dispatch fd succ by pipe, dst worker thread id: %d, [ accept fd, remote client ip ] => [ %d,%s ]", 
+                        pFreeTaskWork->GetWorkId(), ptrconnNode->m_iAccptFd, ptrconnNode->m_sPeerIp.c_str());
+        }
+    }
+
+    void WorkerTask::SetThreadPool( PthreadPools<WorkerTask, std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>>* pThreadPool )
+    {
+        m_pThreadPool = pThreadPool;
     }
 }

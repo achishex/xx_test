@@ -6,7 +6,6 @@
 #include "t_eventconn.hpp"
 #include "t_report_load.h"
 #include "t_timer_report.h"
-#include "t_PortPools.h"
 #include "t_socket.hpp"
 #include "t_busi_module.h"
 #include "proto_inner.h"
@@ -23,7 +22,7 @@ MtsTcp::MtsTcp(const std::string& sIp, unsigned int uiPort)
     m_uiSrvInternetPort(0), m_bInit(false),
     m_pListenSock(NULL), m_pEventBase(NULL), m_pListenConn(NULL),
     m_pPortPool(NULL), m_iCountAccept(0), m_sPolicyIp(""),
-    m_usPolicyPort(0), m_pTimerRport(NULL)
+    m_usPolicyPort(0), m_pTimerRport(NULL), m_pSessionQue(nullptr)
 {
     try {
        m_bInit = Init(); 
@@ -95,6 +94,15 @@ void CallBackReportTimer(int fd, short event, void *arg)
 
 bool MtsTcp::Init()
 {
+    
+    int iQueueLen = 1024;
+    m_pSessionQue = std::make_shared<LockQueue<std::shared_ptr<RelayPortRecord>>>(iQueueLen);
+    if ( m_pSessionQue == nullptr )
+    {
+        MTS_LOG_ERROR("new session queue obj fail");
+        return false;
+    }
+
     if (!m_pListenSock)
     {
         m_pListenSock = new Sock(m_sSrvIp, m_uiSrvPort);
@@ -130,19 +138,6 @@ bool MtsTcp::Init()
     }
 
     m_pPortPool->InitPortPool(udpPortStart,udpPortCount);
-
-    m_sUdpSrvIp =  ConfigXml::Instance()->getValue("UdpServer", "IP");
-    m_usUdpPort =  ::atoi(ConfigXml::Instance()->getValue("UdpServer", "Port").c_str());
-
-    if (m_sUdpSrvIp.empty() || m_usUdpPort <= 0)
-    {
-        MTS_LOG_ERROR("get udp srv ip or port fail from config, udp ip: %s, udp listen port: %d",
-                      m_sUdpSrvIp.c_str(), m_usUdpPort);
-        return false;
-    }
-    MTS_LOG_INFO("read conf, mts udp srv ip: %s, port: %d", m_sUdpSrvIp.c_str(), m_usUdpPort);
-
-    m_pUdpClient.reset(new UdpClient(m_sUdpSrvIp.c_str(), m_usUdpPort));
 
     m_sPolicyIp     = ConfigXml::Instance()->getValue("MediaServer", "PolicyIP");
     m_usPolicyPort  = ::atoi(ConfigXml::Instance()->getValue("MediaServer","PolicyPort").c_str());
@@ -202,7 +197,7 @@ bool MtsTcp::Run()
     }
 
     //create and start udp server thread instance 
-    MtsUdp  udpSrv(m_sUdpSrvIp, m_usUdpPort); 
+    MtsUdp  udpSrv(m_pSessionQue); 
     std::thread udpThread(&MtsUdp::UdpThreadCallback, &udpSrv);
     usleep(100);
     MTS_LOG_INFO("start new udp server thread done");
@@ -222,10 +217,11 @@ bool MtsTcp::Run()
     if ( iRet != 0 )
     {
         MTS_LOG_INFO("tcp main server exit !!!");
-        return true;
     }
 
+    udpSrv.ShutDown();
     udpThread.join();
+
     return true;
 }
 
@@ -294,10 +290,25 @@ void MtsTcp::InitBusiModulePool()
 }
 
 
-bool MtsTcp::SendToUdpSrvCmd(const std::string& sIp, unsigned short usPort,
-                             const void* pData, unsigned short iDataLen)
+bool MtsTcp::SendToUdpSrvCmd(const void* pData, unsigned short iDataLen)
 {
-    return m_pUdpClient->sendTo(sIp, usPort, pData, iDataLen);
+    if (m_pSessionQue == nullptr)
+    {
+        MTS_LOG_ERROR("session queue is null");
+        return false;
+    }
+
+    RelayPortRecord* pRecord = (RelayPortRecord*)pData;
+    if ( iDataLen != sizeof(RelayPortRecord) || pData == NULL )
+    {
+        MTS_LOG_ERROR("inparam data len err");
+        return false;
+    }
+
+    std::shared_ptr<RelayPortRecord> ptrRecord = std::make_shared<RelayPortRecord>(*pRecord);
+    m_pSessionQue->Put(ptrRecord);
+
+    return true;
 }
 
 bool MtsTcp::LoadRport()

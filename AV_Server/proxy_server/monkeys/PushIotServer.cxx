@@ -117,6 +117,9 @@ PushIotServer::PushIotServer(ProxyConfig& config,
     mMediaServerPort(config.getConfigInt("MediaPort", 7878)),
 	mIotServerIP(config.getConfigData("IotServerIP", "10.101.70.52")),
     mIotServerPort(config.getConfigInt("IotServerPort", 7878)),
+    mIotAuthPort(config.getConfigInt("IotAuthPort", 7878)),
+    mAuthFlag(config.getConfigInt("AuthFlag", 0)),
+    mAutuEncryFlag(config.getConfigData("AutuEncryFlag", "false").c_str()),
     mStore(store),
     mLocalSipUri( config.getConfigUri("RecordRouteUri", Uri()) ),
     m_ProxyConfig( config )
@@ -240,7 +243,8 @@ PushIotServer::process(RequestContext &rc)
 		}
 		else
 		{
-			InfoLog(<< "get sipserver failed: Result=" << async_msg_first_step->mQueryResult);
+			InfoLog(<< "get sipserver failed: Result=" << async_msg_first_step->mQueryResult
+                    <<"error message is :"<<async_msg_first_step->mErrorMessage);
             return Continue;
 		}
 	}
@@ -330,10 +334,16 @@ PushIotServer::process(RequestContext &rc)
 		PushIotServerAsyncMessage* async_msg = new PushIotServerAsyncMessage(*this, 
                                                                              rc.getTransactionId(), 
                                                                              &rc.getProxy());
-        async_msg->mCall_ID = rc.getOriginalRequest().header(h_CallID).value();//获取CALL_ID
-		async_msg->mFrom    = rc.getOriginalRequest().header(h_From).uri().getAorNoReally();//获取FROM
-		async_msg->mTo      = rc.getOriginalRequest().header(h_To).uri().getAorNoReally();//获取TO
-        
+        async_msg->mCall_ID    = rc.getOriginalRequest().header(h_CallID).value();//获取CALL_ID
+		async_msg->mFrom       = rc.getOriginalRequest().header(h_From).uri().getAorNoReally();//获取FROM
+		async_msg->mTo         = rc.getOriginalRequest().header(h_To).uri().getAorNoReally();//获取TO
+        /*取私有字段在扩展头里*/
+        resip::ExtensionHeader h_pAuthToken("P-Auth-Token");
+        if(rc.getOriginalRequest().exists(h_pAuthToken))
+        {
+		    async_msg->mAuthToken = rc.getOriginalRequest().header(h_pAuthToken).begin()->value();
+		    InfoLog(<< "Auth Token is:" << async_msg->mAuthToken.c_str() << " Get auth token!");
+        }
         std::auto_ptr<ApplicationMessage> async_msg_first_step(async_msg);
 		mAsyncDispatcher->post(async_msg_first_step);
 
@@ -375,52 +385,85 @@ PushIotServer::asyncProcess(AsyncProcessorMessage* msg)
 	PushIotServerAsyncMessage* async = dynamic_cast<PushIotServerAsyncMessage*>(msg);
 	resip_assert(async);
     
-	async->mQueryResultData = Data("888 Deal internal Message!");
+	async->mQueryResultData = Data("Start Deal internal Message!");
 	async->mQueryResult = 0;
 
-	/*1.先向策略服务器拿媒体服务器IP and port*/
+
+    /*1.先向IOT服务发起鉴权校验*/
+	std::auto_ptr<ConServerSynClient> IotAuthClient(new ConServerSynClient(mIotServerIP.c_str(),mIotAuthPort));
+	if(!IotAuthClient->ConnectServer())
+	{
+	    ErrLog(<< "Connect Iot Auth Server Failed");
+        async->mQueryResult = -1;
+        async->mErrorMessage = "Connect Iot Auth Server Failed";
+        return false;
+	}
+    std::string strFrom      = async->mFrom.c_str();
+	std::string strTo        = async->mTo.c_str();
+    std::string strAuthToken = async->mAuthToken.c_str();  //
+    DebugLog(<<"strFrom = "<<strFrom<<", strTo = "<<strTo<<", strAuthToken = "<<strAuthToken);
+    if (false == SendAuth2Iot(IotAuthClient,strFrom,strTo,strAuthToken))
+    {
+        ErrLog(<< "Iot return Auth Failed");
+        async->mErrorMessage = "Iot return Auth Failed";
+        if (mAuthFlag == 1)
+        {
+            async->mQueryResult = -2;
+            return false;
+        }
+    }
+	
+
+	/*2.第二向策略服务器取媒体服务器IP and port*/
 	std::auto_ptr<ConServerSynClient> plySynClient(new ConServerSynClient(mSipConServerIP.c_str(),mSipConServerPort));
 	if(!plySynClient->ConnectServer())
 	{
-	    ErrLog(<< "Connect ConServer Server Failed");
+	    ErrLog(<< "Connect Policy Server Failed");
+        async->mQueryResult = -3;
+        async->mErrorMessage = "Connect Policy Server Failed";
         return false;
 	}
     std::string strIp; int iPort;
-    SendConServerForMediaIpJson(plySynClient,strIp,iPort);
-    DebugLog(<<"ip = "<<strIp<<", port = "<<iPort);	
-    if (strIp.empty() || iPort <= 0)
+    if (false == GetMediaIP_Port(plySynClient,strIp,iPort))
     {
         ErrLog( << "can't get media ip: " << strIp << ", port: " << iPort );
+        async->mQueryResult = -4;
+        async->mErrorMessage = "get media ip and port Failed";
         return false;
     }
+    DebugLog(<<"ip = "<<strIp<<", port = "<<iPort);	
 
     async->mMediaPortData.m_MtsIp = strIp;
     async->mMediaPortData.m_mtsPort = iPort;
 	
-    /*2.向媒体服务器获取端口*/
+    /*3.向媒体服务器获取端口*/
     std::auto_ptr<ConServerSynClient> MediaClient(new ConServerSynClient(strIp, iPort));
 	if (!MediaClient->ConnectServer())
     {
         ErrLog(<< "Connect Media Server Failed");
+        async->mQueryResult = -5;
+        async->mErrorMessage = "Connect Media Server Failed";
         return false;
     }
 	std::string callId = async->mCall_ID.c_str();
-	if ( false == SendMediaForMediaPortJson(MediaClient, callId, async) )
+	if ( false == GetMediaResourePort(MediaClient, callId, async) )
     {
-        ErrLog( << "get media relay ports faili");
+        ErrLog( << "get media relay ports Failed");
+        async->mQueryResult = -6;
+        async->mErrorMessage = "get media relay ports Failed";
         return false;
     }
 
-	/*3.向IOT发送需要推送的消息*/
-	std::auto_ptr<ConServerSynClient> IotClient(new ConServerSynClient(mIotServerIP.c_str(),mIotServerPort));
-	if(!IotClient->ConnectServer())
+	/*4.向IOT发送需要推送的消息*/
+	std::auto_ptr<ConServerSynClient> IotPushClient(new ConServerSynClient(mIotServerIP.c_str(),mIotServerPort));
+	if(!IotPushClient->ConnectServer())
 	{
-	    ErrLog(<< "Connect Iot Server Failed");
+	    ErrLog(<< "Connect Iot Push Server Failed");
+        async->mQueryResult = -7;
+        async->mErrorMessage = "Connect Iot Push Server Failed";
         return false;
 	}
-	std::string strFrom = async->mFrom.c_str();
-	std::string strTo   = async->mTo.c_str();
-	SendIotForPush(IotClient,strFrom,strTo);
+	SendPush2Iot(IotPushClient,strFrom,strTo);
 	return true;
 }
 
@@ -439,7 +482,7 @@ PushIotServer::ConverJason2String(rapidjson::Document &inroot)
 
 
 //拼接获取流媒体IP的JSON数据 
-void PushIotServer::SendConServerForMediaIpJson(std::auto_ptr<ConServerSynClient> plcli,std::string& strMediaIp,int & iport )
+bool PushIotServer::GetMediaIP_Port(std::auto_ptr<ConServerSynClient> policyCli,std::string& strMediaIp,int & iport )
 {
 	rapidjson::Document oroot;
 	oroot.SetObject();
@@ -472,26 +515,31 @@ void PushIotServer::SendConServerForMediaIpJson(std::auto_ptr<ConServerSynClient
 
     InfoLog(<< "start Send Policy Server....");
     
-    plcli->DoWrite(oroot);//发送消息给策略服务器
+    policyCli->DoWrite(oroot);//发送消息给策略服务器
     rapidjson::Document rspJsonData;
 
     resultData = ConverJason2String(oroot);
 
     InfoLog(<< "req ConServer data =" << resultData);
     //解析策略服务器的返回JSON拿对应的数据
-    if (false == plcli->DoRead(rspJsonData))
+    if (false == policyCli->DoRead(rspJsonData))
     {
         ErrLog( << "read policy server response fail" );
-        return ;
+        return false;
     }
 
-    ParseMediaIP(rspJsonData,strMediaIp,iport);
+    if (false == ParseMediaIP(rspJsonData,strMediaIp,iport))
+    {
+        ErrLog( << "read policy server return media ip_port  fail" );
+        return false;
+    }
     InfoLog(<< "Get media serverip:" << strMediaIp << ", Get media serverport: "<< iport );
+    return true;
 }
 
 //拼接获取流媒体分配的端口的JSON数据
 bool 
-PushIotServer::SendMediaForMediaPortJson(std::auto_ptr<ConServerSynClient> plcli,
+PushIotServer::GetMediaResourePort(std::auto_ptr<ConServerSynClient> mediaCli,
                                          std::string callId,
                                          PushIotServerAsyncMessage* pAsyncMsg)
 {
@@ -534,7 +582,7 @@ PushIotServer::SendMediaForMediaPortJson(std::auto_ptr<ConServerSynClient> plcli
 
     InfoLog(<< "start Send Media Server....");
     //发送消息给mts
-    if ( false == plcli->DoWrite(oroot) )
+    if ( false == mediaCli->DoWrite(oroot) )
     {
         ErrLog (<< "fail send to get media port ");
         return false;
@@ -547,20 +595,108 @@ PushIotServer::SendMediaForMediaPortJson(std::auto_ptr<ConServerSynClient> plcli
     rapidjson::Document rspJsonData;
     
     //解析策略服务器的返回JSON拿对应的数据
-    if ( false == plcli->DoRead(rspJsonData) )
+    if ( false == mediaCli->DoRead(rspJsonData) )
     {
         ErrLog ( << "recv get media port response fail"  );
         return false;
     }
 
-    ParseMediaPort(rspJsonData, pAsyncMsg->mMediaPortData);
+    if (false == ParseMediaResourcePort(rspJsonData, pAsyncMsg->mMediaPortData))
+    {
+        ErrLog ( << "get resource port fail!"  );
+        return false;
+    }
+
     InfoLog(<< "Get media info: " << pAsyncMsg->mMediaPortData);
     return true;
 }
 
+
+ /*组装发送给IOT鉴权推送的JSON*/
+bool PushIotServer::SendAuth2Iot(std::auto_ptr<ConServerSynClient> authCli,std::string strFrom,std::string strTo,std::string strAuthToken)
+{
+    rapidjson::Document oroot;
+	oroot.SetObject();
+	rapidjson::Document::AllocatorType &allocator = oroot.GetAllocator();
+
+    std::string uuid = "2001";
+    rapidjson::Value UUID;
+    UUID.SetString( uuid.c_str() , uuid.length() , allocator ) ;
+    oroot.AddMember("uuid", UUID, allocator);
+
+    rapidjson::Value ENCRY;
+    ENCRY.SetString( mAutuEncryFlag.c_str() , mAutuEncryFlag.length() , allocator ) ;
+    oroot.AddMember("encry", ENCRY, allocator);
+
+    rapidjson::Document content;
+	content.SetObject();
+	rapidjson::Document::AllocatorType &hallocator = content.GetAllocator();
+
+    std::string method = CMD_NO_AUTH_PUSH_IOT;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int timestamp = tv.tv_sec;
+
+	rapidjson::Value method_;
+    method_.SetString( method.c_str() , method.length() , hallocator ) ;
+    content.AddMember("method", method_, hallocator);
+
+    content.AddMember("timestamp", timestamp, hallocator);
+	content.AddMember("req_id", timestamp, hallocator);
+	std::string traceId = "66";
+	std::string spanId  = "66";
+	
+    rapidjson::Value traceid_;
+    traceid_.SetString( traceId.c_str() , traceId.length() , hallocator ) ;
+    content.AddMember("traceId", traceid_, hallocator);
+
+	rapidjson::Value spanid_;
+    spanid_.SetString( spanId.c_str() , spanId.length() , hallocator ) ;
+    content.AddMember("spanId", spanid_, hallocator);
+
+    rapidjson::Document params;
+	params.SetObject();
+	rapidjson::Document::AllocatorType &sallocator = params.GetAllocator();
+
+	rapidjson::Value srcAVURL;
+    srcAVURL.SetString( strFrom.c_str() , strFrom.length() , sallocator ) ;
+    params.AddMember("srcAVURL", srcAVURL, sallocator);//FROM
+
+	rapidjson::Value dstAVURL;
+    dstAVURL.SetString( strTo.c_str() , strTo.length() , sallocator ) ;
+    params.AddMember("dstAVURL", dstAVURL, sallocator);//To
+
+	rapidjson::Value authtoken;
+    authtoken.SetString( strAuthToken.c_str() , strAuthToken.length() , sallocator ) ;
+    params.AddMember("token", authtoken, sallocator);//Token
+
+   	content.AddMember("params", params, sallocator);
+	oroot.AddMember("content", content, hallocator);
+
+    InfoLog(<< "start Send IOT Auth Server....");
+    
+    if ( false == authCli->DoWrite(oroot) )
+    {
+        ErrLog ( << "send Iot msg to server fail" );
+        return false;
+    }
+
+    std::string resultData = ConverJason2String(oroot);
+    DebugLog(<< "req Iot Auth data =" << resultData);
+    
+    rapidjson::Document rspJsonData;
+    if ( false == authCli->DoRead(rspJsonData) )
+    {
+        ErrLog( << "recv Iot Auth msg server response fail");
+        return false;
+    }
+
+   return ParseIotAuthReturnPackage(rspJsonData);
+}
+
 //拼接发送给IOT的JSON数据
 void 
-PushIotServer::SendIotForPush(std::auto_ptr<ConServerSynClient> plcli,std::string strFrom,std::string strTo)
+PushIotServer::SendPush2Iot(std::auto_ptr<ConServerSynClient> inviteCli,std::string strFrom,std::string strTo)
 {
 	rapidjson::Document oroot;
 	oroot.SetObject();
@@ -588,7 +724,7 @@ PushIotServer::SendIotForPush(std::auto_ptr<ConServerSynClient> plcli,std::strin
 	rapidjson::Value spanid_;
     spanid_.SetString( spanId.c_str() , spanId.length() , allocator ) ;
     oroot.AddMember("spanId", spanid_, allocator);
-	string resultData = "";
+	std::string resultData = "";
 
 	rapidjson::Document params;
 	params.SetObject();
@@ -630,7 +766,7 @@ PushIotServer::SendIotForPush(std::auto_ptr<ConServerSynClient> plcli,std::strin
 
     InfoLog(<< "start Send IOT Server....");
     
-    if ( false == plcli->DoWrite(oroot) )
+    if ( false == inviteCli->DoWrite(oroot) )
     {
         ErrLog ( << "send push msg to server fail" );
         return ;
@@ -639,90 +775,164 @@ PushIotServer::SendIotForPush(std::auto_ptr<ConServerSynClient> plcli,std::strin
     resultData = ConverJason2String(oroot);
     DebugLog(<< "req ConServer data =" << resultData);
     
-    rapidjson::Document rspJsonData;
-    if ( false == plcli->DoRead(rspJsonData) )
+    rapidjson::Document rspJsonData; 
+    if ( false == inviteCli->DoRead(rspJsonData) )
     {
         ErrLog( << "recv push msg server response fail"  );
         return ;
     }
 
-    ParseIotReturnPackage(rspJsonData);
+    ParseIotPushReturnPackage(rspJsonData);
 }
 
 
-//解析JSON拿IP
- void PushIotServer::ParseMediaIP(rapidjson::Document &inroot,std::string &strMediaIp,int& iport)
+//解析JSON拿流媒体IP跟端口
+ bool PushIotServer::ParseMediaIP(rapidjson::Document &inroot,std::string &strMediaIp,int& iport)
 {
     do
 	{
 	    if (inroot.HasParseError() )
         {
             break;
+            ErrLog(<<"The policy server return json parse fail");
+            return false;
         }
 	    if (!inroot.IsObject() )
         {
             break;
+            ErrLog(<<"The policy server return code is not an object");
+            return false;
         }
-        if ( inroot.HasMember("result") && inroot["result"].IsObject() )
+        std::string resultData = ConverJason2String(inroot);
+        DebugLog(<< "rsp ConServer data from Policy server is: " << resultData);
+        if(inroot.HasMember("code")  && inroot["code"].IsInt() && inroot["code"].GetInt() == 0)
         {
-           rapidjson::Value info_object(rapidjson::kObjectType);
-           info_object.SetObject();
-           info_object = inroot["result"].GetObject();
-		   if(info_object.HasMember("ip")&&info_object["ip"].IsString())
-		   {
-		       strMediaIp = info_object["ip"].GetString();
-		   }
-		   if(info_object.HasMember("port")&&info_object["port"].IsInt())
-		   {
-		       iport = info_object["port"].GetInt();
-		   }		   
-        }		
+            if ( inroot.HasMember("result") && inroot["result"].IsObject() )
+            {
+                rapidjson::Value info_object(rapidjson::kObjectType);
+                info_object.SetObject();
+                info_object = inroot["result"].GetObject();
+                if(info_object.HasMember("ip")&&info_object["ip"].IsString())
+                {
+                    strMediaIp = info_object["ip"].GetString();
+                }
+                if(info_object.HasMember("port")&&info_object["port"].IsInt())
+                {
+                    iport = info_object["port"].GetInt();
+                }		   
+            }
+            else
+            {
+                ErrLog(<<"The  policy server return package don't contain result!");
+                return false;
+            }	
+        }
+        else
+        {
+            ErrLog(<<"The policy server return code is invalid!"<<inroot["code"].GetInt());
+            return false;
+        }	
 	}while(0);
 
-    return ;
+    return true;
 }
 
 
-//解析JSON拿流媒体端口
- void PushIotServer::ParseMediaPort(rapidjson::Document &inroot,MediaPortSource &AllPortData)
+//解析JSON拿流媒体资源端口
+ bool PushIotServer::ParseMediaResourcePort(rapidjson::Document &inroot,MediaPortSource &AllPortData)
 {
     do
 	{
 	    if (inroot.HasParseError() )
         {
             break;
+            ErrLog(<<"The media server return json parse fail!");
+            return false;
         }
 	    if (!inroot.IsObject() )
         {
             break;
+            ErrLog(<<"The media server return code is not an object");
+            return false;
         }
         std::string resultData = ConverJason2String(inroot);
         DebugLog(<< "rsp ConServer data from media server is: " << resultData);
-        if ( inroot.HasMember("result") && inroot["result"].IsObject() )
+        if(inroot.HasMember("code") && inroot["code"].IsInt() && inroot["code"].GetInt() == 0)
         {
-           rapidjson::Value info_object(rapidjson::kObjectType);
-           info_object.SetObject();
-           info_object = inroot["result"].GetObject();
-		   if(info_object.HasMember("port")&&info_object["port"].IsObject())
-		   {
-		    	AllPortData.relay_caller_audio_rtp_port      = info_object["port"]["relay_caller_audio_rtp_port"].GetInt();
-				AllPortData.relay_caller_audio_rtcp_port     = info_object["port"]["relay_caller_audio_rtcp_port"].GetInt();
-				AllPortData.relay_caller_video_rtp_port      = info_object["port"]["relay_caller_video_rtp_port"].GetInt();
-				AllPortData.relay_caller_video_rtcp_port     = info_object["port"]["relay_caller_video_rtcp_port"].GetInt();
-				AllPortData.relay_callee_audo_io_rtp_port    = info_object["port"]["relay_callee_audo_io_rtp_port"].GetInt();
-				AllPortData.relay_callee_audo_io_rtcp_port   = info_object["port"]["relay_callee_audo_io_rtcp_port"].GetInt();
-				AllPortData.relay_callee_video_io_rtp_port   = info_object["port"]["relay_callee_video_io_rtp_port"].GetInt();
-				AllPortData.relay_callee_video_io_rtcp_port  = info_object["port"]["relay_callee_video_io_rtcp_port"].GetInt();
-		   }		   
+            if ( inroot.HasMember("result") && inroot["result"].IsObject() )
+            {
+                rapidjson::Value info_object(rapidjson::kObjectType);
+                info_object.SetObject();
+                info_object = inroot["result"].GetObject();
+                if(info_object.HasMember("port")&&info_object["port"].IsObject())
+                {
+                        AllPortData.relay_caller_audio_rtp_port      = info_object["port"]["relay_caller_audio_rtp_port"].GetInt();
+                        AllPortData.relay_caller_audio_rtcp_port     = info_object["port"]["relay_caller_audio_rtcp_port"].GetInt();
+                        AllPortData.relay_caller_video_rtp_port      = info_object["port"]["relay_caller_video_rtp_port"].GetInt();
+                        AllPortData.relay_caller_video_rtcp_port     = info_object["port"]["relay_caller_video_rtcp_port"].GetInt();
+                        AllPortData.relay_callee_audo_io_rtp_port    = info_object["port"]["relay_callee_audo_io_rtp_port"].GetInt();
+                        AllPortData.relay_callee_audo_io_rtcp_port   = info_object["port"]["relay_callee_audo_io_rtcp_port"].GetInt();
+                        AllPortData.relay_callee_video_io_rtp_port   = info_object["port"]["relay_callee_video_io_rtp_port"].GetInt();
+                        AllPortData.relay_callee_video_io_rtcp_port  = info_object["port"]["relay_callee_video_io_rtcp_port"].GetInt();
+                }		   
+            }else{
+                ErrLog(<<"The return package media server don't contain result!");
+                return false;
+            }
+        }
+        else
+        {
+            ErrLog(<<"The media server return code is invalid!"<<inroot["code"].GetInt());
+            return false;
         }		
 	}while(0);
 
-    return;
+    return true;
 }
 
 
+//解析IOT的Auth JSON回包
+bool PushIotServer::ParseIotAuthReturnPackage(rapidjson::Document &inroot)
+{
+    bool bret = false;
+    int icode = -1;
+     do
+	{
+	    if (inroot.HasParseError() )
+        {
+            break;
+            ErrLog(<<"The Iot server return json parse fail");
+            return bret;
+        }
+	    if (!inroot.IsObject() )
+        {
+            break;
+            ErrLog(<<"The Iot server return code is not an object");
+            return bret;
+        }
+        std::string resultData = ConverJason2String(inroot);
+        DebugLog(<< "rsp Auth data from Iot server is: " << resultData);
+        if ( inroot.HasMember("content") && inroot["content"].IsObject() )
+        {
+           rapidjson::Value info_object(rapidjson::kObjectType);
+           info_object.SetObject();
+           info_object = inroot["content"].GetObject();
+		   if(info_object.HasMember("code")&&info_object["code"].IsString())
+		   {
+		       icode = info_object["code"].GetInt();
+               if (icode == 0)
+               {
+                   bret=true;
+               }
+		   }	   
+        }		
+	}while(0);
+
+    return bret;
+}
+
 //解析IOT的JSON回包
-void PushIotServer::ParseIotReturnPackage(rapidjson::Document &inroot)
+void PushIotServer::ParseIotPushReturnPackage(rapidjson::Document &inroot)
 {
     do
 	{

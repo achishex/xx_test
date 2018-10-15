@@ -31,18 +31,9 @@
     <!-- 中转udp时分配端口池起始值 -->  
     <udpPortStart>20000</udpPortStart>  
 
-    <!-- 中转udp时分配端口池容量 -->  
+    <!-- 中转udp时分配端口池容量, 实际容量是double*udpPortCount -->  
     <udpPortCount>5000</udpPortCount> 
   </PortPool> 
-
-  <UdpServer>
-      <!-- 内部udp服务 listen ip -->
-      <IP>10.101.70.109</IP>
-
-      <!-- 内部udp服务 listen port -->
-      <Port>30000</Port>
-  </UdpServer>
-
   <Log>
       <!-- 日志属性文件名,默认值即可 -->
       <logPropertiesFileName>avs_mts_log.properties</logPropertiesFileName>

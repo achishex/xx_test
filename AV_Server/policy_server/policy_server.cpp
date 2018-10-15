@@ -6,7 +6,9 @@ namespace  T_TCP
 {
     TcpSrv::TcpSrv(const std::string& sIp, int iPort, int threadNums): m_bInit(false), 
                    p_mListenSock(NULL), m_sLocalIp(sIp), m_iLocalPort(iPort), m_pEventBase(NULL),
-                    m_pThreadPool(NULL),m_iThreadPoolNums(threadNums), p_mListenConn(NULL)
+                    m_pThreadPool(NULL),m_pDispathConnThreadPool(NULL), m_iThreadPoolNums(threadNums), 
+                    p_mListenConn(NULL),m_iConnReqQueueLen(1024), 
+                    m_pConnReqQueue(nullptr)
     {
         try {
             Init();
@@ -40,6 +42,12 @@ namespace  T_TCP
         {
             delete m_pThreadPool;
             m_pThreadPool = NULL;
+        }
+
+        if (m_pDispathConnThreadPool)
+        {
+            delete m_pDispathConnThreadPool;
+            m_pDispathConnThreadPool = NULL;
         }
 
         if (p_mListenConn)
@@ -128,8 +136,26 @@ namespace  T_TCP
         {
             m_iTmerNotifyTms = 5*60;
         }
-        PL_LOG_DEBUG("notify timer tm: %d", m_iTmerNotifyTms);
-         
+        PL_LOG_DEBUG("notify timer tm: %ds", m_iTmerNotifyTms);
+        
+        int iConnReqQueueLen = ::atoi(ConfigXml::Instance()->getValue(
+                "PolicyServer","ConnReqQueueLen").c_str());
+        if (iConnReqQueueLen <=0)
+        {
+            PL_LOG_ERROR("get conf: PolicyServer-ConnReqQueueLen fail,use default len: %d", m_iConnReqQueueLen);
+        }
+        else
+        {
+            m_iConnReqQueueLen = iConnReqQueueLen;
+        }
+
+        PL_LOG_DEBUG("connect req queue len: %d, now create conn req queue", m_iConnReqQueueLen);
+        m_pConnReqQueue = std::make_shared<LockQueue<std::shared_ptr<ConnNodeType>>>(m_iConnReqQueueLen);
+        if (!m_pConnReqQueue)
+        {
+            PL_LOG_ERROR("create conn queue fail");
+            return false;
+        }
         
         PL_LOG_DEBUG("tcp srv init succ");
         m_bInit = true;
@@ -166,6 +192,41 @@ namespace  T_TCP
             return false;
         }
 
+        //m_iThreadPoolNums is work thread nums, 1 is manager cmd thread nums
+        m_pThreadPool = new PthreadPools<WorkerTask, std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>>(m_iThreadPoolNums + 1);
+        if ( !m_pThreadPool->CreateThreads() )
+        {
+            PL_LOG_ERROR("create worker threads fail");
+            return false;
+        }
+        std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>> nullNode(nullptr);
+        m_pThreadPool->SetThreadContent(nullNode);
+        if ( !m_pThreadPool->StartAllThreads() )
+        {
+            PL_LOG_ERROR( "start task thread fail, thread nums: %d, timer thread nums: %d",
+                         m_iThreadPoolNums, 1 );
+            return false;
+        }
+        PL_LOG_INFO("worker threads nums: %d, timer thread nums: %d", m_iThreadPoolNums, 1);
+
+
+        m_pDispathConnThreadPool = new PthreadPools<WorkerTask, std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>>(m_iThreadPoolNums);
+        if ( !m_pDispathConnThreadPool->CreateThreads() )
+        {
+            PL_LOG_ERROR("create dispatch conn thread pool fail");
+            return false;
+        }
+        m_pDispathConnThreadPool->SetThreadContent(m_pConnReqQueue);
+        m_pDispathConnThreadPool->SetTheadPoolEachThead(m_pThreadPool);
+
+        if ( !m_pDispathConnThreadPool->StartAllThreads() )
+        {
+            PL_LOG_ERROR("start dispatch conn req thead fail, thread nums: %d", m_iThreadPoolNums);
+            return false;
+        }
+
+        PL_LOG_INFO("dispatch conn req thread nums: %d", m_iThreadPoolNums);
+
         if (RegisteAcceptConn() == false)
         {
             PL_LOG_ERROR("registe accept conn fail");
@@ -175,15 +236,6 @@ namespace  T_TCP
         if (RegisteNotifyTimer() == false)
         {
             PL_LOG_ERROR("register notify timer fail");
-            return false;
-        }
-
-        //init thread pools
-        //m_iThreadPoolNums is work thread nums, 1 is manager cmd thread nums
-        m_pThreadPool = new PthreadPools<WorkerTask>(m_iThreadPoolNums + 1);
-        if ( false ==  m_pThreadPool->StartAllThreads() )
-        {
-            PL_LOG_ERROR("start task thread fail, thread nums: %d",m_iThreadPoolNums);
             return false;
         }
 
@@ -207,61 +259,23 @@ namespace  T_TCP
             return false;
         }
 
-        PL_LOG_DEBUG("accept new client conn, new fd: %d", iAcceptFd);
-        //从线程池中分配一个事件线程，用于独立接收报文和发送报文.
-        //so,需要有个线程池.
-        WorkerTask* pFreeTaskWork = m_pThreadPool->AllocateThread();
-        if (pFreeTaskWork == NULL)
+        PL_LOG_DEBUG( "accept new client conn, new fd: %d, peer ip: %s, peer port: %d",
+                     iAcceptFd, inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port) );
+
+        if (!m_pConnReqQueue)
         {
+            PL_LOG_ERROR("conn req queue not create");
             close(iAcceptFd);
             iAcceptFd = -1;
-            PL_LOG_ERROR("get free work task thread from pool fail, client ip: %s", 
-                         inet_ntoa(clientAddr.sin_addr));
             return false;
         }
 
-        PL_LOG_DEBUG("new conn fd: %d, remote client ip: %s", iAcceptFd, 
-                     inet_ntoa(clientAddr.sin_addr));
-#if 0 
-        //
-        QueueItem emptyItem;  
-        bool bRet = m_pAcceptConnListFree->DeQue(&emptyItem);
-        if (bRet == false)
-        {
-            PL_LOG_DEBUG("not get free item from connect free list, allocat new que item");
-        }
+        std::shared_ptr<ConnNodeType> reqConnNode = std::make_shared<ConnNodeType>(
+            iAcceptFd, inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port), time(NULL));
+        PL_LOG_DEBUG("put conn node to queue, node: [ %s ]", reqConnNode->ToString().c_str());
 
-        emptyItem.iConnFd = iAcceptFd;
-        bRet = m_pAcceptConnListWorking->EnQue(emptyItem);
-        if (bRet == false)
-        {
-            close(iAcceptFd);
-            iAcceptFd = -1;
-            PL_LOG_ERROR("working connect item list is full");
-            return false;
-        }
-        //拼接一个新连接数据队列，并向发送任务的pipe上发送新请求命令字.
-        if (false == pFreeTaskWork->NotifySendConn(m_pAcceptConnListWorking, m_pAcceptConnListFree))
-        {
-            close(iAcceptFd);
-            iAcceptFd = -1;
-            PL_LOG_ERROR("send notify for new conn cmd fail");
-            return false;
-        }
-#else
-        char buf[4] = {0};
-        unsigned int iNetFd = ::htonl(iAcceptFd);
-        memcpy(buf,&iNetFd, sizeof(buf));
-        if (false == pFreeTaskWork->NotifySendConn(buf, sizeof(buf)))
-        {
-            PL_LOG_ERROR("send new conn fd: %d fail", iAcceptFd);
-            close(iAcceptFd);
-            iAcceptFd = -1;
-            return false;
-        }
-#endif
-        m_iAcceptCountNow ++;
-        PL_LOG_DEBUG("send new conn notify by piple succ, new conn fd: %d", iAcceptFd);
+        m_pConnReqQueue->Put(reqConnNode);
+        m_iAcceptCountNow++;
         return true;
     }
 

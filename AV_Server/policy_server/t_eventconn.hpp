@@ -33,7 +33,6 @@ namespace T_TCP
       virtual bool DelEvent(struct event_base *pEvBase, int iEvent, void *arg);
 
       std::shared_ptr<PolicyBusi> GetBusiModule(const std::string& sMethod = "");
-      void InitBusiModulePool();
      private:
       static void ReadCallBack(int iFd, short sEvent, void *pData); 
       static void WriteCallBack(int iFd, short sEvent, void *pData);
@@ -52,7 +51,8 @@ namespace T_TCP
       CBuffer* pRecvBuff;   //接收缓冲区
       CBuffer* pSendBuff;   //发送缓冲区
 
-      std::map<std::string, std::shared_ptr<PolicyBusi>> m_mpBusiModule;
+      static std::map<std::string, std::shared_ptr<PolicyBusi>> m_mpBusiModule;
+      static std::map<std::string, std::shared_ptr<PolicyBusi>> BuildBusiModule();
     };
 }
 #endif

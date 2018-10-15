@@ -31,10 +31,12 @@ public:
 	Data mQueryResultData;
 	NameAddr mSipServerData;
 	int mQueryResult;
+  std::string mErrorMessage;//错误信息
 	Data mCall_ID;
 	Data mFrom;
 	Data mTo;
-    MediaPortSource mMediaPortData;
+  Data mAuthToken;//鉴权TOKEN
+  MediaPortSource mMediaPortData;
 };
 
 
@@ -52,27 +54,32 @@ class PushIotServer : public AsyncProcessor
       virtual bool asyncProcess(AsyncProcessorMessage* msg);
       
       //interface used for notify processing
-	  bool NotifyMsgPost(const resip::ContactList& vdstContact, RequestContext& rc);
+	    bool NotifyMsgPost(const resip::ContactList& vdstContact, RequestContext& rc);
       
       /*组装策略服务器获取流媒体IP的JSON*/
-      void SendConServerForMediaIpJson(std::auto_ptr<ConServerSynClient> plcli,
+      bool GetMediaIP_Port(std::auto_ptr<ConServerSynClient> policyCli,
                                        std::string &strMediaIp,int & iport);
     /*组装流媒体服务器获取流媒体端口的JSON*/
-      bool  SendMediaForMediaPortJson(std::auto_ptr<ConServerSynClient> plcli,
+      bool  GetMediaResourePort(std::auto_ptr<ConServerSynClient> mediaCli,
                                       std::string strcallId,
                                       PushIotServerAsyncMessage* pAsyncMsg);
-    /*组装发送给IOT推送的JSON*/
-      void SendIotForPush(std::auto_ptr<ConServerSynClient> plcli,std::string strFrom,std::string strTo);
 
+      /*组装发送给IOT鉴权推送的JSON*/
+      bool SendAuth2Iot(std::auto_ptr<ConServerSynClient> authCli,std::string strFrom,std::string strTo,std::string strAuthToken);
+
+      /*组装发送给IOT呼叫推送的JSON*/
+      void SendPush2Iot(std::auto_ptr<ConServerSynClient> inviteCli,std::string strFrom,std::string strTo);
 
        /*解析JSON拿到流媒体IP*/
-       void ParseMediaIP(rapidjson::Document &inroot,std::string &strMediaIp,int & iport);
+       bool ParseMediaIP(rapidjson::Document &inroot,std::string &strMediaIp,int & iport);
        
        /*解析JSON拿到流媒体8个端口*/
-       void ParseMediaPort(rapidjson::Document &inroot,MediaPortSource &AllPortData);
+       bool ParseMediaResourcePort(rapidjson::Document &inroot,MediaPortSource &AllPortData);
 
-    /*解析JSON获取IOT的回包*/
-      void ParseIotReturnPackage(rapidjson::Document &inroot);
+    /*解析JSON获取IOT的AUTH回包*/
+      bool ParseIotAuthReturnPackage(rapidjson::Document &inroot);
+        /*解析JSON获取IOT的PUSH回包*/
+      void ParseIotPushReturnPackage(rapidjson::Document &inroot);
 
 	  inline std::string ConverJason2String(rapidjson::Document &inroot);
    private:
@@ -100,7 +107,9 @@ class PushIotServer : public AsyncProcessor
        /*Iot config*/
        resip::Data mIotServerIP;
        int mIotServerPort;
-
+       int mIotAuthPort;
+       int mAuthFlag;//鉴权标志位(测试过程可先不鉴权设置为0)
+       std::string mAutuEncryFlag;//是否加密标志位(鉴权在IOT那边生产环境需要加密)
 	   resip::RegistrationPersistenceManager& mStore;
        MediaPortSource mMediaPortData;
        

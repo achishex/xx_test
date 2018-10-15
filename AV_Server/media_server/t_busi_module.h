@@ -109,8 +109,7 @@ class PolicyBusi
       m_hasParams = false;
   }
 
-  bool SendToUdpSrv(const std::string& sIP, unsigned short usPort, 
-                    const RelayPortRecord& relayRecord);
+  bool SendToUdpSrv(const RelayPortRecord& relayRecord);
  protected:
   std::string m_sMethod;
   ParamComm m_stReq;

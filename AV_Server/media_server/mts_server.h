@@ -11,7 +11,6 @@
 
 #include <map>
 #include <string>
-#include <memory>
 #include <atomic>
 #include <memory>
 #include <thread>
@@ -30,6 +29,8 @@
 #include "rapidjson/document.h"                                                                                         
 #include "rapidjson/error/en.h"                                                                                         
 #include "rapidjson/prettywriter.h" 
+#include "LockQueue.h"
+#include "t_PortPools.h"
 
 class LoadReport;
 class TimerReport;
@@ -41,6 +42,7 @@ class PolicyBusi;
 class UdpClient;
 
 using namespace rapidjson;
+using namespace util;
 
 class MtsTcp
 {
@@ -60,16 +62,8 @@ class MtsTcp
   void InitBusiModulePool();
   
   PortPool* GetPortPool();
-  const std::string& GetUdpSrvIp() const 
-  {
-      return m_sUdpSrvIp;
-  }
-  unsigned short GetUdpSrvPort() 
-  {
-      return m_usUdpPort;
-  }
-  bool SendToUdpSrvCmd(const std::string& sIp, unsigned short usPort,
-                       const void* pData, unsigned short iDataLen);
+  bool SendToUdpSrvCmd(const void* pData, unsigned short iDataLen);
+                       
   bool LoadRport();
   bool Accept();
 
@@ -97,9 +91,6 @@ private:
   ListenConn*                   m_pListenConn;
   PortPool*                     m_pPortPool;
 
-  std::string                   m_sUdpSrvIp;
-  unsigned short                m_usUdpPort;
-
   std::map<int, AcceptConn*>    m_mpClientConn;
   std::atomic<int>              m_iCountAccept;
 
@@ -108,7 +99,7 @@ private:
   TimerReport*                  m_pTimerRport;
   LoadReport*                   m_pLoadReport;
  
-  std::unique_ptr<UdpClient>    m_pUdpClient;
+  std::shared_ptr<LockQueue<std::shared_ptr<RelayPortRecord>>> m_pSessionQue;
 };
 
 #endif

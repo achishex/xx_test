@@ -15,7 +15,8 @@ SessionItem::~SessionItem()
     {
         event_del( &m_event );
 
-        MTS_LOG_DEBUG("close fd: %d, session id: %s", m_sock, m_session_id.c_str());
+        MTS_LOG_DEBUG("close fd: %d, port: %d, session id: %s", 
+                      m_sock, m_port, m_session_id.c_str());
         close(m_sock);
         m_sock = -1;
     }

@@ -8,7 +8,7 @@ namespace T_TCP
     {
     }
 
-    PthreadBase::PthreadBase(pthread_mutex_t* pInitLock, pthread_cond_t* pInitCond, int* pInitNums)
+    PthreadBase::PthreadBase(pthread_mutex_t* pInitLock, pthread_cond_t* pInitCond, std::atomic<int>* pInitNums)
         :m_iPid(-1), m_bRun(false),m_pInitLock(pInitLock), m_pInitCond(pInitCond),
         m_pReadyThreadNums(pInitNums)
     {

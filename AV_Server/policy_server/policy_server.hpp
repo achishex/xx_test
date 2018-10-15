@@ -25,11 +25,14 @@
 #include  "redis_pool.h"
 #include  "FreeLockQueue.h"
 #include  "configXml.h"
+#include  "LockQueue.h"
+#include "t_req_conn_node.h"
 
 #include <memory>
 
 #define ConnectFreeListLen     (128)
 
+using namespace util;
 namespace T_TCP
 {
     class ListenConn;
@@ -59,8 +62,12 @@ namespace T_TCP
       int m_iLocalPort;
       struct event_base* m_pEventBase;
       
-      //thread pools
-      PthreadPools<WorkerTask>* m_pThreadPool;
+      //thread pools: task thread pool obj
+      PthreadPools<WorkerTask, std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>>* m_pThreadPool;
+
+      //thread pools: dispatch new conn thread pool obj
+      PthreadPools<WorkerTask, std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>>>* m_pDispathConnThreadPool;
+
       int m_iThreadPoolNums;
       
       FreeLockQue<QueueItem>* m_pAcceptConnListWorking;
@@ -75,6 +82,9 @@ namespace T_TCP
       volatile int m_iAcceptCountLast;
       int m_iTmerNotifyTms;  //定时通知落库线程开始落库的时间间隔,unit is second
       struct event* pEv_Tmr;
+      //
+      int m_iConnReqQueueLen;
+      std::shared_ptr<LockQueue<std::shared_ptr<ConnNodeType>>> m_pConnReqQueue; //用于存储peer端的连接
     };
 }
 #endif

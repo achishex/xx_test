@@ -24,21 +24,6 @@ void PortPool::InitPortPool(unsigned short usUdpBase, unsigned short usUdpPortCo
     }
 }
 
-#if 0
-unsigned short PortPool::GetUdpPort()
-{
-    std::lock_guard<std::mutex> lock(m_udpPoolMutex);
-
-    unsigned short tmpUdpPort = 0;
-    if (m_vUdpPortPool.size() > 0)
-    {
-        tmpUdpPort = m_vUdpPortPool.front();
-        m_vUdpPortPool.pop_front();
-    }
-    return tmpUdpPort;
-}
-#endif
-
 bool PortPool::CheckPortUsable(unsigned short usPort)
 {
     int listenfd;
@@ -66,53 +51,10 @@ bool PortPool::CheckPortUsable(unsigned short usPort)
     return true;
 }
 
-#if 0
-bool PortPool::CheckUdpPortPairsUsable(unsigned short usPort)
-{
-    return (CheckPortUsable(usPort) && CheckPortUsable(usPort+1));
-}
-#endif
-
 bool PortPool::CheckUdpPortPairsUsable(std::pair<unsigned short,unsigned short>  usPort)
 {
     return (CheckPortUsable(usPort.first) && CheckPortUsable(usPort.second));
 }
-
-#if 0
-unsigned short PortPool::GetAndCheckUdpPort(int iRedo)
-{
-    unsigned short usPort = 0;
-    do 
-    {
-        usPort = GetUdpPort();
-        if (usPort == 0)
-        {
-            break;
-        }
-        if (CheckUdpPortPairsUsable(usPort))
-        {
-            break;
-        }
-
-        RecycleUdpPort(usPort);
-        usPort = 0;
-    } while (iRedo-- >0);
-    return usPort;
-}
-
-void PortPool::RecycleUdpPort(unsigned short usPort)
-{
-    if (usPort > 0)
-    {
-        std::lock_guard<std::mutex> lock(m_udpPoolMutex);
-        auto it = std::find( m_vUdpPortPool.begin(), m_vUdpPortPool.end(), usPort);
-        if (it == m_vUdpPortPool.end())
-        {
-            m_vUdpPortPool.push_back(usPort);
-        }
-    }
-}
-#endif
 
 void PortPool::RecycleUdpPort(std::pair<unsigned short,unsigned short>  usPort)
 {
@@ -139,26 +81,18 @@ PortPool::GetUdpRtpRtcpPort()
     do {
         if ( m_pqPortPools.empty() || m_pqPortPools.size() < 2 )
         {
-            for ( const auto& one: tmpPortList )
-            {
-                m_pqPortPools.push( one );
-            }
-            return portRTP_RTCP;
+            break;
         }
 
-        if ( (m_pqPortPools.top() % 2) == 0)
+        if ((m_pqPortPools.top() % 2) == 0)
         {
             portRTP_RTCP.first = m_pqPortPools.top();
             m_pqPortPools.pop();
             
             portRTP_RTCP.second = m_pqPortPools.top();
             m_pqPortPools.pop();
-            
-            for ( const auto& one: tmpPortList )
-            {
-                m_pqPortPools.push( one );
-            }
-            return portRTP_RTCP;
+
+            break;
         }
 
         tmpPortList.push_front( m_pqPortPools.top() );
@@ -166,6 +100,13 @@ PortPool::GetUdpRtpRtcpPort()
 
     } while( !m_pqPortPools.empty() );
 
+    for ( const auto& one: tmpPortList )
+    {
+        if ( one > 0 )
+        {
+            m_pqPortPools.push( one );
+        }
+    }
     return portRTP_RTCP;
 }
 
@@ -179,7 +120,9 @@ PortPool::GetAndCheckUdpRtpRtcpPort(int iRedo)
         portRtpRtcp = GetUdpRtpRtcpPort( );
         if ( portRtpRtcp.first == 0 || portRtpRtcp.second == 0 )
         {
-            break;
+            RecycleUdpPort( portRtpRtcp );
+            portRtpRtcp.first = portRtpRtcp.second = 0;
+            continue;
         }
         if ( CheckUdpPortPairsUsable(portRtpRtcp) )
         {
@@ -189,7 +132,18 @@ PortPool::GetAndCheckUdpRtpRtcpPort(int iRedo)
         RecycleUdpPort(portRtpRtcp);
         portRtpRtcp.first = portRtpRtcp.second = 0;
 
-    } while( iRedo -- >0 );
+    } while( iRedo-- >0 );
 
     return portRtpRtcp;
+}
+
+unsigned int PortPool::GetUsablePortNums()
+{
+    std::lock_guard<std::mutex> lock(m_udpPoolMutex);
+    return m_pqPortPools.size();
+}
+
+unsigned int PortPool::GetPortPoolCap() const
+{
+    return m_usUdpPortCount;
 }

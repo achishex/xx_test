@@ -22,6 +22,7 @@
 #include <iostream>
 #include <utility>
 #include <vector>
+#include <sstream>
 
 struct RelayPortRecord
 {
@@ -85,6 +86,21 @@ struct RelayPortRecord
         }
         return *this;
     }
+    std::string ToString()
+    {
+        std::stringstream ios;
+        ios << "[sessionid, "
+            << "caller_artp_port, caller_artcp_port, caller_vrtp_port, caller_vrtcp_port, "
+            << "callee_artp_port, callee_artcp_port, callee_vrtp_port, callee_vrtcp_port, "
+            << "relay_cmd]"
+            << " => "
+            << "[" << m_sSessId << ","
+            << usCallerARtpPort << "," << usCallerARtcpPort << "," << usCallerVRtpPort << "," << usCallerVRtcpPort << ","
+            << usCalleeARtpPort << "," << usCalleeARtcpPort << "," << usCalleeVRtpPort << "," << usCalleeVRtcpPort << ","
+            << usRelayCmd
+            << "]";
+        return ios.str();
+    }
 };
 
 class PortPool
@@ -96,9 +112,11 @@ class PortPool
   void InitPortPool(unsigned short usUdpBase, unsigned short usUdpPortCount);
   std::pair<unsigned short, unsigned short> GetUdpRtpRtcpPort( );
 
-  std::pair<unsigned short, unsigned short> GetAndCheckUdpRtpRtcpPort(int iRedo = 10);
+  std::pair<unsigned short, unsigned short> GetAndCheckUdpRtpRtcpPort(int iRedo = 3);
 
   void RecycleUdpPort(std::pair<unsigned short,unsigned short>  usPort);
+  unsigned int GetUsablePortNums();
+  unsigned int GetPortPoolCap() const;
 
  public:
   std::map<std::string, RelayPortRecord> m_mpClientSession;
