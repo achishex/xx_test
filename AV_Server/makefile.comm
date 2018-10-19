@@ -40,7 +40,7 @@ endif
 export SYSTEM_LIB_PATH
 #
 MakeAccelerator=$(ThirdPathDir)/bin/ccache
-CXX = $(shell command -v $(MakeAccelerator) >/dev/null 2>&1 && echo "$(MakeAccelerator) g++" || echo "g++")
+CXX = $(shell command -v $(MakeAccelerator) >/dev/null 2>&1 && echo "$(MakeAccelerator) g++ -fdiagnostics-color=auto" || echo "g++")
 CC  = $(shell command -v $(MakeAccelerator) >/dev/null 2>&1 && echo "$(MakeAccelerator) gcc" || echo "gcc")
 CXXFLAGS = -g -O0 -fPIC -ggdb -Wall -ftemplate-depth-128 -std=c++11
 LDFLAGS = -Wl,-Bsymbolic -Wl,--enable-new-dtags 

@@ -237,14 +237,8 @@ bool ReleaseChannel::ProcessBusi(const rapidjson::Document &inRoot, rapidjson::D
     pairRtpRtcp.second = oneRelaySession.usCalleeVRtcpPort;
     p_mtsTcp->GetPortPool()->RecycleUdpPort( pairRtpRtcp );
 
-    MTS_LOG_DEBUG("release relay port: callerARtp => %d,"
-                  "callerARtcp => %d,"
-                  "callerVRtp => %d,"
-                  "callerVRtcp => %d,"
-                  "calleeARtp => %d,"
-                  "calleeARtcp => %d,"
-                  "calleeVRtp => %d,"
-                  "calleeVRtcp => %d, session id: %s",
+    MTS_LOG_DEBUG("release relay port,[ callerARtp, callerARtcp, callerVRtp, callerVRtcp, calleeARtp, calleeARtcp, calleeVRtp, calleeVRtcp ] => "
+                  " [ %d, %d, %d, %d, %d, %d, %d, %d ], session id: %s",
                   oneRelaySession.usCallerARtpPort,
                   oneRelaySession.usCallerARtcpPort, 
                   oneRelaySession.usCallerVRtpPort,

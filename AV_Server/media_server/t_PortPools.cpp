@@ -1,4 +1,5 @@
 #include <iostream>
+#include "avs_mts_log.h"
 #include "t_PortPools.h"
 #include <string.h>
 #include <algorithm>
@@ -61,10 +62,12 @@ void PortPool::RecycleUdpPort(std::pair<unsigned short,unsigned short>  usPort)
     std::lock_guard<std::mutex> lock(m_udpPoolMutex);
     if (usPort.first > 0)
     {
+        MTS_LOG_DEBUG("recycle port:[ %d ] to port pool", usPort.first);
         m_pqPortPools.push(usPort.first);
     }
     if (usPort.second > 0)
     {
+        MTS_LOG_DEBUG("recycle port:[ %d ] to port pool", usPort.second);
         m_pqPortPools.push(usPort.second);
     }
 }

@@ -2,6 +2,7 @@
 #include <event2/thread.h>
 #include "avs_mts_log.h"
 #include "t_mts_udp_proto.h"
+#include "configXml.h"
 
 PthreadManager::PthreadManager()
     : m_cur_thread_index( 0 ), m_iPoolSize(0),
@@ -85,7 +86,9 @@ void PthreadManager::DispatchUdpMsg( void * buf,  int buf_len )
             {
                 pEventBase  =   get_idle_thread();
                 pNowSession =   EventManager::Instance()->acquire();
-                bool iRet   =   pNowSession->Init(*pRelayItem, pEventBase->get_base());
+                bool iRet   =   pNowSession->Init(*pRelayItem, pEventBase->get_base(),
+                                                 ConfigXml::Instance()->getValue("MediaServer","IP"),
+                                                 ::atoi( ConfigXml::Instance()->getValue("MediaServer", "Port" ).c_str()));
                 if (iRet == false)
                 {
                     MTS_LOG_ERROR("new session fail on session id: %s", sSessionId.c_str());

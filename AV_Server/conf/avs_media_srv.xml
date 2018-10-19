@@ -25,6 +25,12 @@
 
     <!--媒体服务外网服务端口-->
     <InternetPort>10010</InternetPort>
+
+    <!-- 监测端口收流的定时器时间-->
+    <PortMonitTimerTm>60</PortMonitTimerTm>
+
+    <!-- 定时器监测未收到数据的连续次数-->
+    <Fail_Max_Tms>3</Fail_Max_Tms>
   </MediaServer>  
 
   <PortPool> 

@@ -1,3 +1,4 @@
+#include "protocol/proto_inner.h"
 #include "avs_mts_log.h"
 
 #include "t_udp_session.h"
@@ -7,18 +8,23 @@
 
 #include <netinet/in.h> 
 #include <arpa/inet.h>
+#include "configXml.h"
 
-///
+
+int UdpSession::MAXTIMES_FAIL       = 0;
+int UdpSession::PortMoniterTimerTm  = 0;
+
 SessionItem::~SessionItem()
 {
     if (m_sock > 0)
     {
         event_del( &m_event );
 
-        MTS_LOG_DEBUG("close fd: %d, port: %d, session id: %s", 
-                      m_sock, m_port, m_session_id.c_str());
+        MTS_LOG_DEBUG("close fd: %d, port: %d, recv pkg: %d, session id: %s", 
+                      m_sock, m_port, m_iRecvPkgNums, m_session_id.c_str());
         close(m_sock);
         m_sock = -1;
+        m_iRecvPkgNums = 0;
     }
     
     m_is_data_ok = false;
@@ -30,21 +36,44 @@ SessionItem::~SessionItem()
 
 
 UdpSession::UdpSession()
-    : m_destroying(false)
+    : m_destroying(false), m_pMoniterTimeEvent(NULL),m_iCountAccum(0), 
+    m_pReleasePortHandle(nullptr)
 {
+    UdpSession::MAXTIMES_FAIL  = ::atoi(ConfigXml::Instance()->getValue("MediaServer", "Fail_Max_Tms").c_str());
+    if ( MAXTIMES_FAIL <= 0 )
+    {
+        MAXTIMES_FAIL = 3;
+    }
+
+    PortMoniterTimerTm = ::atoi(ConfigXml::Instance()->getValue("MediaServer", "PortMonitTimerTm").c_str());
+    if (PortMoniterTimerTm <= 0)
+    {
+        PortMoniterTimerTm  = 60;  //60 second, 1 minute
+    }
 }
 
 UdpSession::~UdpSession()
 {
     m_mpSessionPorts.clear();
     m_sessionId.clear();
+
+    if (m_pMoniterTimeEvent)
+    {
+        evtimer_del(m_pMoniterTimeEvent);
+        event_free(m_pMoniterTimeEvent);
+        m_pMoniterTimeEvent = NULL;
+    }
 }
 
 
-bool UdpSession::Init( const RelayPortRecord& record, struct event_base * base )
+bool UdpSession::Init( const RelayPortRecord& record, struct event_base * base,
+                      const std::string& sMediaIp, unsigned int uiMediaPort)
 {
     m_destroying        =   false;
     m_sessionId         =   record.m_sSessId;
+    m_sMediaIp          =   sMediaIp;
+    m_iMediaPort        =   uiMediaPort;
+
     m_mpSessionPorts.clear();   
     
     int iCalllerARtpFd = CreateUdpEvent(record.m_sSessId, record.usCallerARtpPort, base);
@@ -99,7 +128,19 @@ bool UdpSession::Init( const RelayPortRecord& record, struct event_base * base )
     UpdatePeerFd(iCalllerARtcpFd,   iCalleeARtcpFd);
     UpdatePeerFd(iCallerVRtpFd,     iCalleeVRtpFd);
     UpdatePeerFd(iCallerVRtcpFd,    iCalleeVRtcpFd);
+    
+    m_pReleasePortHandle = std::make_shared<TcpClient>(base);
+    if (m_pMoniterTimeEvent == NULL)
+    {
+        m_pMoniterTimeEvent = event_new( base, -1, EV_PERSIST, timer_callback, this );
+        struct timeval tv;
+        evutil_timerclear(&tv);
 
+        tv.tv_sec = PortMoniterTimerTm; //monitor timer vdefault alue: 30 secoind.
+        evtimer_add( m_pMoniterTimeEvent, &tv );
+        MTS_LOG_DEBUG("create monitor timer event, timer tm: %ds, session id: %s", 
+                      tv.tv_sec, m_sessionId.c_str());
+    }
     return true;
 }
 
@@ -213,20 +254,64 @@ int UdpSession::CreateUdpEvent(const std::string& sessid,
 
 void UdpSession::CloseSession()
 {
-    m_mpSessionPorts.clear();
     MTS_LOG_DEBUG("Close session and recycle ports, session id: %s", m_sessionId.c_str());
-    m_destroying = false ; //
-
+    ResetResource();
     EventManager::Instance()->release( this ); //lock inside.
+}
+
+void UdpSession::timer_callback(int fd, short event, void* arg)
+{
+    UdpSession* e = reinterpret_cast< UdpSession* >( arg );
+    e->TimerTimeOutCallback(fd , event );
+}
+
+void UdpSession::TimerTimeOutCallback( int fd,  short event )
+{
+    int iSize = m_mpSessionPorts.size();
+    for (auto &one: m_mpSessionPorts)
+    {
+        if (one.second == nullptr)
+        {
+            MTS_LOG_ERROR( "fd: %d, session item is null", one.first );
+            iSize--;
+            continue;
+        }
+
+        MTS_LOG_DEBUG( "port static : %s", one.second->ToString().c_str() );
+        if (one.second->m_iRecvPkgNums == 0)
+        {
+            iSize--;
+            continue;
+        }
+
+        one.second->m_iRecvPkgNums  = 0; //reset recv pkg nums;
+        m_iCountAccum               = 0; //reset accumulative count;
+    }
+
+    if (iSize == 0 && !m_mpSessionPorts.empty())
+    {
+        m_iCountAccum++;
+        MTS_LOG_DEBUG("all fd not recv any data, session id: %s, accumulative no-recv data nums: [ %d ]", 
+                      m_sessionId.c_str(), m_iCountAccum);
+    }
+
+    if ( m_iCountAccum > UdpSession::MAXTIMES_FAIL ) //set default value
+    {
+        MTS_LOG_ERROR("continuously not recv data: [ %d ] times, session id: %s, now send close session",
+                      UdpSession::MAXTIMES_FAIL, m_sessionId.c_str());
+        ReleaseMtsPort( );
+        m_iCountAccum = 0;
+        return ;
+    }
 }
 
 void UdpSession::recv_callback(int fd, short event, void* arg)
 {
     UdpSession* e = reinterpret_cast< UdpSession* >( arg );
-    e->ReadProcess( fd,  event );
+    e->ReadProcess( fd, event );
 }
 
-void UdpSession::ReadProcess( int fd,  short event )
+void UdpSession::ReadProcess( int fd, short event )
 {
     struct sockaddr_in addr;
     socklen_t size = sizeof(addr);
@@ -260,6 +345,9 @@ void UdpSession::ReadProcess( int fd,  short event )
         return ;
     }
 
+    //update fd recv pkg nums
+    it->second->m_iRecvPkgNums++;
+
     if (it->second->m_is_data_ok == false)
     {
         MTS_LOG_INFO("first begin to recv data on fd: %d, port: %d, session id: %s",
@@ -269,7 +357,6 @@ void UdpSession::ReadProcess( int fd,  short event )
         it->second->m_remoteAddr.sin_port    = (addr.sin_port);
         it->second->m_is_data_ok = true;
     }
-
     int& iPeerFd    = it->second->m_peer_sock;
     auto itPeer     = m_mpSessionPorts.find(iPeerFd);
     if (itPeer == m_mpSessionPorts.end())
@@ -354,7 +441,91 @@ std::string UdpSession::ToString()
     return ios.str();
 }
 
+void UdpSession::ReleaseMtsPort( )
+{
+    MTS_LOG_DEBUG( "now send cmd to release mts port,"
+                  " [ mts ip, port, session id ] => [ %s, %d, %s ]",
+                  m_sMediaIp.c_str(), m_iMediaPort, m_sessionId.c_str() );
+    
+    rapidjson::Document oRoot;
+    if ( false == BuildReleaseMtsMsg( oRoot ) )
+    {
+        MTS_LOG_ERROR("build release mts port msg fail");
+        return ;
+    }
+
+    bool bRet = m_pReleasePortHandle->Send( m_sMediaIp, m_iMediaPort, oRoot );
+    if (bRet == false)
+    {
+        MTS_LOG_ERROR("send release mts port fail, session id: %s", m_sessionId.c_str());
+    }
+}
+
+bool UdpSession::BuildReleaseMtsMsg( rapidjson::Document& oroot )
+{
+    oroot.SetObject();
+    rapidjson::Document::AllocatorType &allocator = oroot.GetAllocator();
+    std::string method = CMD_NO_RELEASE_RELAY_PORT_REQ;
+    struct timeval tv; 
+    gettimeofday(&tv, NULL); 
+    int timestamp = tv.tv_sec;
+    std::string traceId(m_sessionId);
+    std::string spanId  = "local_release_tmout_port";
+
+    rapidjson::Value method_;
+    method_.SetString( method.c_str() , method.length() , allocator ) ;
+    oroot.AddMember("method", method_, allocator);
+
+    oroot.AddMember("timestamp", timestamp, allocator);
+    oroot.AddMember("req_id", timestamp, allocator);
+
+    rapidjson::Value traceid_;
+    traceid_.SetString( traceId.c_str() , traceId.length() , allocator ) ;
+    oroot.AddMember("traceId", traceid_, allocator);
+
+    rapidjson::Value spanid_;
+    spanid_.SetString( spanId.c_str() , spanId.length() , allocator ) ;
+    oroot.AddMember( "spanId", spanid_, allocator );
+
+    rapidjson::Document params;
+    params.SetObject();
+    rapidjson::Document::AllocatorType &sallocator = params.GetAllocator();
+
+    rapidjson::Value params_;
+    params_.SetString( m_sessionId.c_str(), m_sessionId.size() , sallocator ) ;
+    params.AddMember("session_id", params_, sallocator);//获取会话ID为callid
+    oroot.AddMember("params", params, sallocator);
+    
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    oroot.Accept(writer);
+    std::string sResultData = buffer.GetString();
+    MTS_LOG_DEBUG("local release mts port msg: %s", sResultData.c_str());
+
+    return true;
+}
+
+void UdpSession::ResetResource()
+{
+    if (m_pMoniterTimeEvent)
+    {
+        evtimer_del(m_pMoniterTimeEvent);
+        event_free(m_pMoniterTimeEvent);
+        m_pMoniterTimeEvent = NULL;
+    }
+    m_sessionId.clear();
+    m_mpSessionPorts.clear();
+    m_pReleasePortHandle.reset();
+    m_iCountAccum = 0;
+    m_destroying = false;
+}
+
 /*-------------------------------------------------------------*/
+EventManager::~EventManager()
+{
+    m_ThreadStop = false;
+}
+
 UdpSession*  EventManager::acquire()
 {
     UdpSession* e = NULL ;
@@ -374,20 +545,78 @@ UdpSession*  EventManager::acquire()
     return e;
 }
 
-void EventManager::release(UdpSession* e )
+void EventManager::release( UdpSession* e )
 {
     if( e  ==  NULL ) 
         return ;
 
     std::lock_guard<std::mutex> lock(m_lock);
-    m_list.push_back( e ) ;
-}
-
-EventManager::EventManager():  m_base(NULL)
-{
+    m_list.push_back( e );
 }
 
 void EventManager::Init(event_base * base)
 {
 	m_base = base;
+    m_iSessionSize = 30;
+}
+
+void EventManager::Init( int iQSize, int iCheckTms )
+{
+    if (iQSize <= 0)
+    {
+        iQSize = 30;
+    }
+    m_iSessionSize = iQSize;
+
+    if (iCheckTms <= 0)
+    {
+        iCheckTms = 300;
+    }
+    m_iCheckTm = iCheckTms;
+
+    MTS_LOG_INFO("session pool init size: %d, check thread timer tm: %d",
+                m_iSessionSize, m_iCheckTm);
+
+    {
+        std::lock_guard<std::mutex> lock(m_lock);
+        for (int i = 0; i < m_iSessionSize; ++i)
+        {
+            UdpSession* pSessionNode = new UdpSession();
+            m_list.push_back(pSessionNode);
+        }
+        MTS_LOG_INFO("create new session for session pool,item nums: [ %d ]", m_iSessionSize);
+    }
+
+    m_ThreadStop  = false;
+
+    MTS_LOG_DEBUG("create thread to check session pool status");
+    m_pthdCheckTimer = std::make_shared<std::thread>( &EventManager::CheckTimerTmoutCallback, this );
+    m_pthdCheckTimer->detach();
+}
+
+void EventManager::CheckTimerTmoutCallback( )
+{
+    while( !m_ThreadStop )
+    {
+        MTS_LOG_DEBUG("start session pool check thread, id: %lu", std::this_thread::get_id());
+        {
+            std::lock_guard<std::mutex> lock(m_lock);
+            if (m_list.size() > (unsigned int)m_iSessionSize*2)
+            {
+                MTS_LOG_INFO( "session size: %d, threshod: %d", m_list.size(), m_iSessionSize );
+                while( m_list.size() > (unsigned int)m_iSessionSize )
+                {
+                    UdpSession* pNode = m_list.back();
+                    delete pNode;
+                    m_list.pop_back();
+                }
+                MTS_LOG_INFO( "session size shrink: %d", m_list.size() );
+            }
+        }
+
+        MTS_LOG_DEBUG("session pool check thread id: %lu, now sleep tm: %ds",
+                      std::this_thread::get_id(), m_iCheckTm);
+        sleep(m_iCheckTm);
+    }
+    MTS_LOG_INFO("session pool check thread exit, id: %lu", std::this_thread::get_id());
 }

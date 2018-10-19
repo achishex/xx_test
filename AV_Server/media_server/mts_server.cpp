@@ -154,8 +154,15 @@ bool MtsTcp::Init()
     MTS_LOG_INFO("new report load timer obj");
 
     m_pLoadReport = new LoadReport(this);
+    
+    int icnfSessionSize = ::atoi( ConfigXml::Instance()->getValue("MediaServer","SessionSize").c_str() );
+    int icnfCheckTm = atoi( ConfigXml::Instance()->getValue("MediaServer","CheckSessionTimerTm").c_str() );
 
+    MTS_LOG_DEBUG("cnf_session_pool_size: %d, cnf_check_timer_tm: %d", icnfSessionSize, icnfCheckTm);
+
+    EventManager::Instance()->Init( icnfSessionSize, icnfCheckTm );
     MTS_LOG_INFO("avs mts init succ, main loop base event addr: %p", m_pEventBase);
+
     m_bInit = true;
     return m_bInit;
 }

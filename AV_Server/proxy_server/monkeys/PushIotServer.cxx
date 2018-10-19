@@ -284,7 +284,10 @@ PushIotServer::process(RequestContext &rc)
 
         //add statistic receviced invite times, add by achilsh
         proxyHandle.GetReportLoadContent()->IncrConnNums();
-        //should delete timer.
+
+        //modify contact value by request msg via's rport value
+        ModifyContactByReqViaRport( rc );
+
         return Continue;
     }
     else if (tmr_msg_third_step)
@@ -1179,6 +1182,52 @@ bool PushIotServer::ReleaseRemoteMediaPort(const resip::Data& dCallId,
                    << rspJsonData["msg"].GetString() );
             return false;
         }
+    }
+    return true;
+}
+
+bool PushIotServer::ModifyContactByReqViaRport( RequestContext& rc )
+{
+    resip::SipMessage& reqSipMsg = rc.getOriginalRequest();
+    if ( reqSipMsg.exists(h_Vias) == false  || reqSipMsg.header(h_Vias).empty() )
+    {
+        ErrLog( << "req msg Vias is empty" );
+        return false;
+    }
+
+    int iRPortData = 0;
+
+    for ( Vias::const_iterator viaIt = reqSipMsg.header(h_Vias).begin();
+         viaIt != reqSipMsg.header(h_Vias).end(); viaIt++ )
+    {
+        if (viaIt->isWellFormed() == false)
+        {
+            continue;
+        }
+        DebugLog (<< "Vias: " << *viaIt <<", exist: " << viaIt->exists(p_rport) << ", hasvalue(): " 
+                  << viaIt->param(p_rport).hasValue() <<",value: " << viaIt->param(p_rport).port());
+
+        if ( viaIt->exists(p_rport) == false )
+        {
+            continue;
+        }
+
+        iRPortData = viaIt->param(p_rport).port();
+        break;
+    }
+
+    if (iRPortData <= 0 )
+    {
+        ErrLog( << "not get rport field in vias" );
+        return false;
+    }
+
+    ParserContainer<NameAddr>& contactList = reqSipMsg.header(h_Contacts);
+    ParserContainer<NameAddr>::iterator itContact = contactList.begin();
+    for ( ; itContact != contactList.end(); ++itContact)
+    {
+        DebugLog( << "orig port: " <<  itContact->uri().port() << ", new port: " << iRPortData );
+        itContact->uri().port() = iRPortData;
     }
     return true;
 }

@@ -15,8 +15,16 @@
 #include <event2/buffer.h>
 #include <event.h>
 #include <memory>
+#include <thread>
+
+#include "rapidjson/writer.h"                                                                                           
+#include "rapidjson/stringbuffer.h"                                                                                     
+#include "rapidjson/document.h"                                                                                         
+#include "rapidjson/error/en.h"                                                                                         
+#include "rapidjson/prettywriter.h" 
 
 #include "t_PortPools.h"
+#include "t_tcp_client.h"
 
 struct SessionItem
 {
@@ -29,9 +37,10 @@ struct SessionItem
     int             m_peer_sock;    //
     std::string     m_session_id;   // 
     struct sockaddr_in  m_remoteAddr;
+    int             m_iRecvPkgNums;
 
     SessionItem(): m_port(0), m_sock(-1), m_is_data_ok(false),
-                    m_peer_sock(-1), m_session_id("")
+                    m_peer_sock(-1), m_session_id(""), m_iRecvPkgNums(0)
     { 
         ::bzero(&m_remoteAddr, sizeof(m_remoteAddr)); 
         memset(&m_event, 0, sizeof(m_event));
@@ -40,9 +49,10 @@ struct SessionItem
     const std::string ToString() const
     {
         std::stringstream ios;
-        ios << " [port, sock, sess_id, is_recv_data_flag] => [ "
-            << m_port << "," << m_sock << "," << m_session_id << ","
-            << m_is_data_ok << " ]";
+        ios << " [port, sock, recv_pkg_nums, sess_id, is_recv_data_flag] => [ "
+            << m_port << "," << m_sock << "," << m_iRecvPkgNums << "," 
+            << m_session_id << "," << m_is_data_ok << " ]";
+        
         std::string dstStr(ios.str());
         return dstStr;
     }
@@ -53,7 +63,6 @@ struct SessionItem
     SessionItem& operator = (const SessionItem& item);
 };
 
-
 class UdpSession
 {
 private:
@@ -61,12 +70,17 @@ private:
 public:
     UdpSession();
    ~UdpSession();
-    bool Init(const RelayPortRecord& record, struct event_base * base );
+    bool Init(const RelayPortRecord& record, struct event_base * base,
+              const std::string& sMediaIp, unsigned int uiMediaPort);
 
+   void ResetResource();
     void NotifyCloseSession( ); // 开始 退出
 private:
     static void recv_callback(int fd, short event, void* arg) ;
+    static void timer_callback(int fd, short event, void* arg);
+
     void ReadProcess( int fd,  short event ) ;
+    void TimerTimeOutCallback( int fd,  short event );
 
     void CloseSession();
     int CreateUdpEvent( const std::string& sessid, 
@@ -74,12 +88,24 @@ private:
                         struct event_base * base);
    bool UpdatePeerFd(int irstFd, int indFd);
    std::string ToString();
+   void ReleaseMtsPort( );
+
+   bool BuildReleaseMtsMsg( rapidjson::Document& onRoot );
 private:
    // 是否要退出
    std::atomic<bool>            m_destroying;  
    std::string                  m_sessionId;
    //key: fd
    std::map<int, std::shared_ptr<SessionItem>> m_mpSessionPorts; 
+   //add monitor timer
+   struct event*                m_pMoniterTimeEvent;
+   int                          m_iCountAccum;
+   std::string                  m_sMediaIp;
+   int                          m_iMediaPort;
+   std::shared_ptr<TcpClient>   m_pReleasePortHandle;
+
+   static int                   MAXTIMES_FAIL;      // 统计端口连续未收到数据的次数
+   static int                   PortMoniterTimerTm; // 监控端口的定时器时间
 };
 
 
@@ -90,12 +116,25 @@ public:
     UdpSession*  acquire() ;  // 获取
     void  release( UdpSession* e ) ; // 释放
     void Init(event_base * base);
-    EventManager();
-
+    void Init(int iQSize = 30, int iCheckTms = 300 /** 5minute **/);
+    virtual ~EventManager();
  private:
-    std::mutex      m_lock;
-    std::list< UdpSession* >  m_list ;
-    event_base * m_base;
+    EventManager()
+        :m_base(NULL), m_iSessionSize(30),
+        m_iCheckTm(300), m_ThreadStop(false) {}
+    void CheckTimerTmoutCallback();
+    
+    std::mutex                  m_lock;
+    std::list< UdpSession* >    m_list ;
+    event_base*                 m_base;
+
+    int                         m_iSessionSize;
+    int                         m_iCheckTm;
+
+    std::shared_ptr<std::thread>    m_pthdCheckTimer;
+    std::atomic<bool>               m_ThreadStop;
+    //
+    friend CSingleton<EventManager>;
 };
 
 #endif

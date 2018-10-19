@@ -90,6 +90,8 @@ class PushIotServer : public AsyncProcessor
 
       bool PostReleaseMtsPortMsg( RequestContext& rc, const std::string& sIp, unsigned int uiPort );
       bool ReleaseRemoteMediaPort(const resip::Data& dCallId, const std::string& sIp, unsigned int uiPort);
+
+      bool ModifyContactByReqViaRport( RequestContext& rc );
    private:
 	   short parseActionResult(const resip::Data& result, resip::Data& redirectReason);
 	   processor_action_t applyActionResult(RequestContext &rc,
