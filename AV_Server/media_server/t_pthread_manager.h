@@ -13,9 +13,6 @@
 class PthreadManager: public CSingleton <PthreadManager> // 管理线程类
 {
  public:
-    ~PthreadManager();
-    PthreadManager();
-     
     int  Init( int workThreadCount = 10 );              /**<  called in main thread*/
     void DispatchUdpMsg( void * buf,  int buf_len );    /**< called in udp thread */
 
@@ -30,6 +27,11 @@ class PthreadManager: public CSingleton <PthreadManager> // 管理线程类
     int                                     m_iReadyThreadNums;
     std::vector< UdpServerEventBase * >     m_thread_list;
     std::map<std::string, UdpSession*>      m_mpRelaySession;
+    
+    ~PthreadManager();
+    PthreadManager();
+     
+    friend CSingleton<PthreadManager>;
 };
 
 #endif

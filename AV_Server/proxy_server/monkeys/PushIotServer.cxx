@@ -279,14 +279,14 @@ PushIotServer::process(RequestContext &rc)
             ErrLog( << "replace sdp media info fail, callid: " <<  dCallId);
         }
 
-        DebugLog( << "invite, replace sdp media info succ, callid: " << dCallId);
-        DebugLog( << "invite request msg: \r\n" << *msg);
-
         //add statistic receviced invite times, add by achilsh
         proxyHandle.GetReportLoadContent()->IncrConnNums();
 
         //modify contact value by request msg via's rport value
         ModifyContactByReqViaRport( rc );
+
+        DebugLog( << "invite, replace sdp media info succ, callid: " << dCallId);
+        DebugLog( << "invite request msg: \r\n" << *msg);
 
         return Continue;
     }
@@ -1226,8 +1226,11 @@ bool PushIotServer::ModifyContactByReqViaRport( RequestContext& rc )
     ParserContainer<NameAddr>::iterator itContact = contactList.begin();
     for ( ; itContact != contactList.end(); ++itContact)
     {
-        DebugLog( << "orig port: " <<  itContact->uri().port() << ", new port: " << iRPortData );
+        DebugLog( << "orig [ ip:port ] => [ " << itContact->uri().host() <<":" 
+                 <<  itContact->uri().port() << " ]" << ", new [ ip:port ] => [ "
+                 << Tuple::inet_ntop( reqSipMsg.getSource() ) << ":" << iRPortData );
         itContact->uri().port() = iRPortData;
+        itContact->uri().host() = Tuple::inet_ntop( reqSipMsg.getSource() );
     }
     return true;
 }
